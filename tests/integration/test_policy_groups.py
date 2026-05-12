@@ -163,6 +163,44 @@ def test_list_agent_groups(client, seeded_agent):
     assert g1["policy_ids"] == ["CONTENT_001"]
 
 
+def test_create_agent_assigns_company_and_department_groups(client):
+    client.post("/v1/policy-groups", json={"id": "GLOBAL_COMPANY_RULES", "name": "Company"})
+    client.post("/v1/policy-groups", json={"id": "DEPT_LEGAL", "name": "Legal"})
+
+    r = client.post(
+        "/api/agents",
+        json={
+            "id": "agent-dept-001",
+            "name": "Dept Agent",
+            "department_group_id": "DEPT_LEGAL",
+        },
+    )
+
+    assert r.status_code == 201, r.text
+    assert r.json()["policy_group_ids"] == ["GLOBAL_COMPANY_RULES", "DEPT_LEGAL"]
+
+
+def test_replace_agent_groups_set_semantics(client, seeded_agent):
+    client.post("/v1/policy-groups", json={"id": "GLOBAL_COMPANY_RULES", "name": "Company"})
+    client.post("/v1/policy-groups", json={"id": "DEPT_SALES", "name": "Sales"})
+    client.post("/v1/policy-groups", json={"id": "EXCEPTION_A", "name": "Exception"})
+
+    r = client.put(
+        f"/api/agents/{seeded_agent['id']}/policy-groups",
+        json={
+            "department_group_id": "DEPT_SALES",
+            "policy_group_ids": ["EXCEPTION_A"],
+        },
+    )
+
+    assert r.status_code == 200, r.text
+    assert r.json()["policy_group_ids"] == [
+        "GLOBAL_COMPANY_RULES",
+        "DEPT_SALES",
+        "EXCEPTION_A",
+    ]
+
+
 def test_unassign_group(client, seeded_agent):
     client.post("/v1/policy-groups", json={"id": "GUN", "name": "un"})
     client.post(f"/api/agents/{seeded_agent['id']}/policy-groups", json={"group_id": "GUN"})

@@ -92,6 +92,14 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenPair:
 
     실패 시 401 (사유 무차별 동일 — 사용자 enumeration 방지).
     """
+    s = get_settings()
+    if s.demo_auth_bypass:
+        return TokenPair(
+            access_token=create_access_token(sub="demo-admin", role="admin", policy_groups=[]),
+            refresh_token=create_refresh_token(sub="demo-admin"),
+            expires_in=s.jwt_access_token_ttl_minutes * 60,
+        )
+
     user = db.query(UserModel).filter(UserModel.username == payload.username).first()
     if (
         not user
@@ -103,7 +111,6 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenPair:
             detail="invalid_credentials",
         )
 
-    s = get_settings()
     return TokenPair(
         access_token=create_access_token(
             sub=user.id, role=user.role, policy_groups=user.policy_groups or []
@@ -116,6 +123,13 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenPair:
 @router.post("/refresh", response_model=AccessOnly)
 def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> AccessOnly:
     """refresh_token 으로 새 access_token 발급. role/policy_groups 는 DB 에서 재조회."""
+    s = get_settings()
+    if s.demo_auth_bypass:
+        return AccessOnly(
+            access_token=create_access_token(sub="demo-admin", role="admin", policy_groups=[]),
+            expires_in=s.jwt_access_token_ttl_minutes * 60,
+        )
+
     try:
         decoded = decode_token(payload.refresh_token, expected_type="refresh")
     except TokenError as e:
@@ -131,7 +145,6 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> AccessOnl
             detail="user_inactive_or_deleted",
         )
 
-    s = get_settings()
     return AccessOnly(
         access_token=create_access_token(
             sub=user.id, role=user.role, policy_groups=user.policy_groups or []

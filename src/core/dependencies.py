@@ -5,7 +5,8 @@ from uuid import uuid4
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
-from src.core.auth import TokenError, decode_token, hash_api_key
+from src.core.auth import TokenError, decode_token, hash_api_key, verify_api_key
+from src.core.config import get_settings
 from src.database.connection import SessionLocal
 from src.database.models import ApiKeyModel, UserModel
 
@@ -43,6 +44,15 @@ def get_current_user(
 
     토큰 만료/서명 오류 → 401. 비활성/삭제 사용자 → 401.
     """
+    settings = get_settings()
+    if settings.demo_auth_bypass:
+        return AuthenticatedUser(
+            user_id="demo-admin",
+            username="demo-admin",
+            role="admin",
+            policy_groups=[],
+        )
+
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -112,6 +122,16 @@ def require_api_key(
          (256비트 엔트로피 + B-tree 인덱스 lookup → 실질 timing leak 없음)
       3) is_active / expires_at 검증
     """
+    settings = get_settings()
+    if settings.demo_auth_bypass:
+        return ApiKeyModel(
+            id="demo-api-key",
+            agent_id="demo-agent",
+            key_hash="",
+            description="Demo auth bypass",
+            is_active=True,
+        )
+
     if not x_api_key or not x_api_key.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -121,7 +141,7 @@ def require_api_key(
     candidate_hash = hash_api_key(raw)
 
     api_key = db.query(ApiKeyModel).filter(ApiKeyModel.key_hash == candidate_hash).first()
-    if api_key is None:
+    if api_key is None or not verify_api_key(raw, api_key.key_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid_api_key",

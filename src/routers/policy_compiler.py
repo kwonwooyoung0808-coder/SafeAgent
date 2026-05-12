@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import shutil
 import tempfile
@@ -19,6 +21,7 @@ from src.utils.policy_cache import get_policy_cache
 from src.workflows.doc_parser_workflow import build_doc_parser_graph
 
 router = APIRouter(prefix="/v1/policy-compiler", tags=["policy-compiler"])
+logger = logging.getLogger(__name__)
 
 
 def _preserve_failed_upload(tmp_path: str, original_filename: str) -> Path:
@@ -91,22 +94,62 @@ async def policy_compile(
     if not (file.filename or "").endswith(".docx"):
         raise HTTPException(status_code=400, detail=".docx 파일만 허용합니다.")
 
-    content = await file.read()
-    if len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="파일 크기는 10MB 이하여야 합니다.")
-
+    max_upload_size = 10 * 1024 * 1024
+    written = 0
     with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
-        tmp.write(content)
         tmp_path = tmp.name
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_upload_size:
+                tmp.close()
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise HTTPException(status_code=413, detail="파일 크기는 10MB 이하여야 합니다.")
+            tmp.write(chunk)
 
     try:
         graph = build_doc_parser_graph()
-        final = await graph.ainvoke({
-            "file_path":      tmp_path,
-            "policy_name":    policy_name,
-            "effective_date": effective_date,
-            "warnings":       [],
-        })
+        settings = get_settings()
+        logger.info(
+            "Policy compile started filename=%s timeout=%ss",
+            file.filename,
+            settings.policy_compiler_timeout_seconds,
+        )
+        try:
+            final = await asyncio.wait_for(
+                graph.ainvoke({
+                    "file_path":      tmp_path,
+                    "policy_name":    policy_name,
+                    "effective_date": effective_date,
+                    "warnings":       [],
+                }),
+                timeout=settings.policy_compiler_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            preserved_path = _preserve_failed_upload(tmp_path, file.filename or "")
+            warnings = [
+                f"정책 변환 제한 시간 초과: {settings.policy_compiler_timeout_seconds}초",
+                f"원본 보존: {preserved_path}",
+                "대형 문서는 한국식 조문 draft 또는 더 작은 문서 단위로 나누어 재시도하세요.",
+            ]
+            fail_marker = _log_failed_conversion(
+                original_filename=file.filename or "",
+                preserved_path=preserved_path,
+                warnings=warnings,
+                error_message="policy_compile_timeout",
+            )
+            return PolicyConvertResponse(
+                policy_id=fail_marker,
+                yaml_path=None,
+                status="FAILED",
+                parsed_rules_count=0,
+                warnings=warnings,
+            )
 
         has_yaml = bool(final.get("yaml_path"))
         status = "FAILED"

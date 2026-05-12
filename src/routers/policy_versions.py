@@ -39,10 +39,6 @@ class PolicyVersionItem(BaseModel):
     deactivated_at: datetime | None
 
 
-class PolicyVersionDetail(PolicyVersionItem):
-    yaml_snapshot: str | None
-
-
 class PolicyVersionListResponse(BaseModel):
     items: list[PolicyVersionItem]
     total: int
@@ -82,11 +78,11 @@ def _to_item(row: PolicyVersionModel) -> PolicyVersionItem:
 
 def _deactivate_current(db: Session, policy_id: str, now: datetime) -> None:
     """주어진 policy_id 의 현재 활성 버전을 비활성화. is_current=TRUE 행은 최대 1개."""
-    current = db.query(PolicyVersionModel).filter(
+    current_rows = db.query(PolicyVersionModel).filter(
         PolicyVersionModel.policy_id == policy_id,
         PolicyVersionModel.is_current == True,
-    ).first()
-    if current:
+    ).all()
+    for current in current_rows:
         current.is_current = False
         current.deactivated_at = now
 

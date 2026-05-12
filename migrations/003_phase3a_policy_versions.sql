@@ -26,6 +26,30 @@ CREATE INDEX IF NOT EXISTS ix_policy_versions_is_current
 CREATE INDEX IF NOT EXISTS ix_policy_version_policy_current
     ON policy_versions(policy_id, is_current);
 
+-- 기존 데이터에 중복 current 가 있다면 최신 1개만 남기고 정리한다.
+WITH ranked_current AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY policy_id
+            ORDER BY activated_at DESC NULLS LAST, created_at DESC, id DESC
+        ) AS rn
+    FROM policy_versions
+    WHERE is_current = TRUE
+)
+UPDATE policy_versions pv
+SET is_current = FALSE,
+    deactivated_at = COALESCE(pv.deactivated_at, NOW())
+FROM ranked_current rc
+WHERE pv.id = rc.id
+  AND rc.rn > 1;
+
+-- policy_id 당 활성 버전은 정확히 하나만 허용한다.
+-- PostgreSQL partial unique index: is_current=TRUE 인 행에만 유일성 적용.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_policy_versions_one_current
+    ON policy_versions(policy_id)
+    WHERE is_current = TRUE;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_policy_id_version
     ON policy_versions(policy_id, version);
 

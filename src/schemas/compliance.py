@@ -12,9 +12,9 @@ class ViolationDetail(BaseModel):
 
 
 class ResponseValidateRequest(BaseModel):
-    agent_id: str
-    query: str
-    response: str
+    agent_id: str = Field(min_length=1, max_length=80)
+    query: str = Field(min_length=1, max_length=10_000)
+    response: str = Field(min_length=1, max_length=50_000)
     # 생략 시 agent 의 등록된 기본 policy_id 사용. 둘 다 없으면 422.
     policy_id: str | None = None
     audit_query_id: str | None = None

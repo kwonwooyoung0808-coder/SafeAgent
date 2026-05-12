@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - optional dependency until langgraph is
 class WorkflowGraphState(TypedDict, total=False):
     run_id: str
     user_input: str
-    requested_response: str | None
+    requested_response: str
     generated_response: str | None
     final_response: str | None
     context: dict[str, Any]
@@ -30,8 +30,9 @@ class WorkflowGraphState(TypedDict, total=False):
 
 
 def run_generator_step(state: WorkflowState) -> WorkflowState:
-    generated_response = state.requested_response or f"Generated response for: {state.user_input}"
-    return apply_generated_response(state, generated_response)
+    if not state.requested_response:
+        raise ValueError("EvaluateRequest.response is required for legacy evaluation.")
+    return apply_generated_response(state, state.requested_response)
 
 
 def run_governance_step(state: WorkflowState) -> WorkflowState:
