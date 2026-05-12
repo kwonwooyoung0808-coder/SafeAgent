@@ -1,0 +1,51 @@
+id: "CONTENT_001"
+name: "corporate_content_safety"
+version: "2.1.0"
+enabled: true
+type: "rule"
+judge_required: "never"
+severity: "high"
+priority: 100
+
+context_scope: ["query", "response"]
+
+rules:
+  - condition: "contains_categorized_forbidden_terms"
+    on_rule_failure: "block_immediately"
+    parameters:
+      categories:
+
+        violence_hate:
+          enabled: true 
+          exact_terms: ["폭력", "violence", "혐오", "hate", "테러", "terror", "차별", "discrimination", "살인", "murder", "죽여", "kill"]
+          phrase_patterns: ["폭력을 조장", "혐오 발언", "특정 집단 비하", "(?i)how to kill", "(?i)how to murder"]
+        
+        sexual_content:
+          enabled: true
+          exact_terms: ["포르노", "porn", "성착취", "sexual exploitation", "강간", "rape", "미성년자 성"]
+          phrase_patterns: ["성행위 방법", "노골적 성적", "(?i)how to have sex"]
+        
+        suicide_self_harm:
+          enabled: true
+          exact_terms: ["자살", "suicide", "자해", "self-harm", "목매다", "hang oneself", "거식증 조장"]
+          phrase_patterns: ["자살 방법", "자해 하는 법", "자살 추천", "(?i)how to commit suicide"]
+        
+        criminal_planning:
+          enabled: true
+          exact_terms: ["방화", "arson", "납치", "kidnap", "사기", "fraud", "scam", "다크웹", "dark web", "마약", "drugs", "불법무기", "illegal weapons"]
+          phrase_patterns: ["범죄 계획", "총기 제작", "폭발물 만드는 법", "(?i)how to make a bomb"]
+
+        corporate_risk:
+          enabled: true
+          exact_terms: ["합법입니다", "불법입니다", "영업비밀", "프로젝트 넥서스", "강력 매수"]
+          phrase_patterns: ["투자를 적극 권장", "반드시 .* 처벌을 받습니다"]
+
+        privacy_pii:
+          enabled: true
+          pii_patterns:
+            - "(?i)\\b[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}\\b"
+            - "\\b\\d{6}-?\\d{7}\\b"
+
+action:
+  type: "BLOCK"
+  fallback_response: "회사 내규 및 안전 정책에 따라 해당 내용의 질의/응답은 차단되었습니다."

@@ -1,0 +1,72 @@
+{
+  "product": "SafeAgent Manager",
+  "channel": "stable",
+  "current_version": "0.1.0",
+  "latest_version": "0.2.0",
+  "published_at": "2026-05-10T10:00:00+09:00",
+  "requires_migration": true,
+  "priority": "Recommended",
+  "recommended_install_mode": "docker-compose",
+  "artifacts": [
+    {
+      "name": "safeagent-deployment-bundle.zip",
+      "path": "https://drive.google.com/uc?export=download&id=1Ai9rviGbjON_pQWDlBcrbmRnrRvcEBtl",
+      "kind": "deployment-bundle"
+    }
+,
+    {
+      "name": "docker-compose.release.yml",
+      "path": "./downloads/docker-compose.release.yml",
+      "kind": "compose-template"
+    },
+    {
+      "name": ".env.release.example",
+      "path": "./downloads/.env.release.example",
+      "kind": "environment-template"
+    },
+    {
+      "name": "install-guide.md",
+      "path": "./downloads/install-guide.md",
+      "kind": "installation-guide"
+    },
+    {
+      "name": "install.bat",
+      "path": "./downloads/install.bat",
+      "kind": "windows-installer"
+    },
+    {
+      "name": "install.sh",
+      "path": "./downloads/install.sh",
+      "kind": "linux-installer"
+    },
+    {
+      "name": "prepare-release-images.ps1",
+      "path": "./downloads/prepare-release-images.ps1",
+      "kind": "windows-image-exporter"
+    },
+    {
+      "name": "prepare-release-images.sh",
+      "path": "./downloads/prepare-release-images.sh",
+      "kind": "linux-image-exporter"
+    }
+  ],
+  "notes": [
+    "배포 번들에 API와 포털 Docker 이미지 tar 파일을 함께 포함했습니다.",
+    "현재 권장 설치 방식은 docker load 기반 오프라인 설치입니다.",
+    "운영 반영 전 데이터베이스 마이그레이션이 필요합니다."
+  ],
+  "history": [
+    {
+      "at": "2026-05-10T10:20:00+09:00",
+      "version": "v0.2.0",
+      "action": "오프라인 설치 번들 정리 및 tar 포함",
+      "status": "Ready"
+    },
+    {
+      "at": "2026-05-09T14:30:00+09:00",
+      "version": "v0.1.0",
+      "action": "최초 Self-Hosted 배포",
+      "status": "Completed"
+    }
+  ]
+}

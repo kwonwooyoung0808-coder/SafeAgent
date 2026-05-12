@@ -1,0 +1,31 @@
+services:
+  api:
+    image: ${SAFEAGENT_API_IMAGE:-safeagent-api-local:v0.2.0}
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+
+  frontend:
+    image: ${SAFEAGENT_FRONTEND_IMAGE:-safeagent-portal-local:v0.2.0}
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: safeagent
+      POSTGRES_USER: safeagent_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

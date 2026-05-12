@@ -1,0 +1,56 @@
+[
+  {
+    "_comment": "사용자 작성 필요 — 아래 구조를 참고해 실제 테스트 케이스를 추가하세요.",
+    "_schema": {
+      "id": "GS-XXX (고유 식별자)",
+      "description": "테스트 케이스 설명",
+      "input_text": "테스트할 내규 문서 텍스트",
+      "expected": {
+        "forbidden_words": ["문서에 명시된 금지어 목록"],
+        "compliance_checks": [
+          {"description": "준수 사항 설명", "severity": "HIGH | MEDIUM | LOW"}
+        ],
+        "actions": {
+          "on_forbidden_word": "BLOCK | LOG"
+        }
+      },
+      "hallucinated_words_must_not_include": ["문서에 없는 단어 — 추출되면 환각으로 판정"]
+    }
+  },
+  {
+    "id": "GS-001",
+    "description": "기본 금지어 추출 테스트",
+    "input_text": "임직원은 '폭력', '불법', '횡령' 표현을 사용해서는 안 됩니다. 위반 시 즉시 차단한다.",
+    "expected": {
+      "forbidden_words": ["폭력", "불법", "횡령"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["욕설", "비하", "혐오"]
+  },
+  {
+    "id": "GS-002",
+    "description": "severity 명시 추출 테스트",
+    "input_text": "개인정보 미포함 규정(HIGH 수준)과 포맷 준수(MEDIUM 수준)를 반드시 지켜야 한다.",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "개인정보 미포함", "severity": "HIGH"},
+        {"description": "포맷 준수", "severity": "MEDIUM"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-003",
+    "description": "환각 방지 테스트 — 문서에 없는 단어 추출 금지",
+    "input_text": "탄핵을 일각라.",
+    "expected": {
+      "forbidden_words": ["탄핵"],
+      "compliance_checks": [],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": ["폭력", "욕설", "비하", "횡령"]
+  }
+]
