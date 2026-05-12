@@ -10,7 +10,7 @@ services:
       - postgres
 
   frontend:
-    image: ${SAFEAGENT_FRONTEND_IMAGE:-safeagent-portal-local:v0.2.0}
+    image: ${SAFEAGENT_FRONTEND_IMAGE:-safeagent-dashboard-local:v0.2.0}
     restart: unless-stopped
     ports:
       - "3000:80"

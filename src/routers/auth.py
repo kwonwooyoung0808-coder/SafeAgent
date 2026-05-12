@@ -42,6 +42,14 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=512)
 
 
+class SignupRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=8, max_length=512)
+    role: str = Field(default="viewer", max_length=50)
+    name: str | None = None
+    company_code: str | None = None
+
+
 class TokenPair(BaseModel):
     access_token: str
     refresh_token: str
@@ -84,6 +92,34 @@ class PasswordChangeRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────
 # 엔드포인트
 # ──────────────────────────────────────────────────────────────
+import uuid
+
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
+def signup(payload: SignupRequest, db: Session = Depends(get_db)):
+    """회원가입 API"""
+    existing_user = db.query(UserModel).filter(UserModel.username == payload.username).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="username_already_exists",
+        )
+    
+    # 임시: 회사 코드 검증 로직이 필요하다면 여기에 추가
+    # if payload.company_code != "SA-1234-X":
+    #     raise HTTPException(status_code=400, detail="invalid_company_code")
+
+    new_user = UserModel(
+        id=str(uuid.uuid4()),
+        username=payload.username,
+        hashed_password=hash_password(payload.password),
+        role=payload.role,
+        policy_groups=[],
+        is_active=True
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {"message": "signup_success", "user_id": new_user.id}
 
 
 @router.post("/login", response_model=TokenPair)

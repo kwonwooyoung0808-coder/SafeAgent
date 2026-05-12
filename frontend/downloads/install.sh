@@ -21,8 +21,8 @@ if [ ! -f "safeagent-api-v0.2.0.tar" ]; then
   exit 1
 fi
 
-if [ ! -f "safeagent-portal-v0.2.0.tar" ]; then
-  echo "[SafeAgent] Missing safeagent-portal-v0.2.0.tar."
+if [ ! -f "safeagent-dashboard-v0.2.0.tar" ]; then
+  echo "[SafeAgent] Missing safeagent-dashboard-v0.2.0.tar."
   echo "[SafeAgent] Please download the latest deployment bundle again."
   exit 1
 fi
@@ -31,7 +31,7 @@ echo "[SafeAgent] Loading API image..."
 docker load -i safeagent-api-v0.2.0.tar
 
 echo "[SafeAgent] Loading portal image..."
-docker load -i safeagent-portal-v0.2.0.tar
+docker load -i safeagent-dashboard-v0.2.0.tar
 
 echo "[SafeAgent] Starting containers..."
 docker compose -f docker-compose.release.yml up -d

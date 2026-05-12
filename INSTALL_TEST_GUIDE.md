@@ -33,7 +33,7 @@
 - `.env.release.example`
 - `install-guide.md`
 - `safeagent-api-v0.2.0.tar`
-- `safeagent-portal-v0.2.0.tar`
+- `safeagent-dashboard-v0.2.0.tar`
 
 ## 설치 테스트 전 확인사항
 같은 PC에서 기존 SafeAgent가 이미 실행 중이면 포트 충돌이 날 수 있습니다.
@@ -113,7 +113,7 @@ docker ps
 - postgres
 
 ### 2. 브라우저 확인
-- 프론트: `http://localhost:3000`
+- 대시보드: `http://localhost:3000`
 - 백엔드 헬스체크: `http://localhost:8000/health`
 - Swagger: `http://localhost:8000/docs`
 

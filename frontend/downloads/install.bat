@@ -21,8 +21,8 @@ if not exist "safeagent-api-v0.2.0.tar" (
   exit /b 1
 )
 
-if not exist "safeagent-portal-v0.2.0.tar" (
-  echo [SafeAgent] Missing safeagent-portal-v0.2.0.tar.
+if not exist "safeagent-dashboard-v0.2.0.tar" (
+  echo [SafeAgent] Missing safeagent-dashboard-v0.2.0.tar.
   echo [SafeAgent] Please download the latest deployment bundle again.
   exit /b 1
 )
@@ -32,7 +32,7 @@ docker load -i safeagent-api-v0.2.0.tar
 if errorlevel 1 exit /b 1
 
 echo [SafeAgent] Loading portal image...
-docker load -i safeagent-portal-v0.2.0.tar
+docker load -i safeagent-dashboard-v0.2.0.tar
 if errorlevel 1 exit /b 1
 
 echo [SafeAgent] Starting containers...

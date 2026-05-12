@@ -7,7 +7,7 @@ from src.core.dependencies import get_db
 from src.database.models import AuditLogModel, QueryAuditLogModel, ResponseAuditLogModel
 from src.schemas.audit import AuditLogResponse # 스키마 임포트
 
-router = APIRouter(prefix="/api/v1", tags=["audit"])
+router = APIRouter(prefix="/v1", tags=["audit"])
 
 # response_model을 지정해 주어야 Swagger에 문서화됩니다.
 @router.get("/audit-logs", response_model=list[AuditLogResponse])

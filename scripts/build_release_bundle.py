@@ -21,7 +21,7 @@ FILES_TO_PACKAGE = [
     BUNDLE_SCRIPTS / "build_release_images.ps1",
     BUNDLE_SCRIPTS / "build_release_images.sh",
     DOWNLOADS / "safeagent-api-v0.2.0.tar",
-    DOWNLOADS / "safeagent-portal-v0.2.0.tar",
+    DOWNLOADS / "safeagent-dashboard-v0.2.0.tar",
 ]
 
 

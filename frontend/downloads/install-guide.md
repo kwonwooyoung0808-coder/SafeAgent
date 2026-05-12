@@ -19,7 +19,7 @@ PostgreSQL은 `docker-compose.release.yml` 안의 `postgres` 서비스가 같이
 - `install.bat`
 - `install.sh`
 - `safeagent-api-v0.2.0.tar`
-- `safeagent-portal-v0.2.0.tar`
+- `safeagent-dashboard-v0.2.0.tar`
 
 `.tar` 파일이 없다면 오프라인 설치를 진행할 수 없습니다. 번들을 다시 받아주세요.
 
@@ -68,7 +68,7 @@ DATABASE_URL=postgresql://safeagent_app:MyStrongPassword123@postgres:5432/safeag
 ### 보통 그대로 사용 가능한 항목
 
 - `SAFEAGENT_API_IMAGE=safeagent-api-local:v0.2.0`
-- `SAFEAGENT_FRONTEND_IMAGE=safeagent-portal-local:v0.2.0`
+- `SAFEAGENT_FRONTEND_IMAGE=safeagent-dashboard-local:v0.2.0`
 
 오프라인 설치에서는 번들 안의 `.tar`를 `docker load`로 등록하므로 위 기본값을 그대로 쓰는 것이 맞습니다.
 
@@ -97,7 +97,7 @@ chmod +x install.sh
 
 ```bash
 docker load -i safeagent-api-v0.2.0.tar
-docker load -i safeagent-portal-v0.2.0.tar
+docker load -i safeagent-dashboard-v0.2.0.tar
 ```
 
 ### 2) 컨테이너 실행

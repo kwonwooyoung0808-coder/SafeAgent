@@ -7,7 +7,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
 DOWNLOADS = FRONTEND / "downloads"
-BUNDLE_PATH = DOWNLOADS / "safeagent-portal-static-site.zip"
+BUNDLE_PATH = DOWNLOADS / "safeagent-dashboard-static-site.zip"
 
 STATIC_FILES = [
     FRONTEND / "index.html",

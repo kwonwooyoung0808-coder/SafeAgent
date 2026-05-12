@@ -29,3 +29,6 @@ src/policies/failed_uploads/
 # 배포용으로 생성되는 대용량 산출물은 Git에 포함하지 않음
 frontend/downloads/*.tar
 frontend/downloads/*.zip
+
+# 시스템 기획안 (로컬 문서)
+system.md
