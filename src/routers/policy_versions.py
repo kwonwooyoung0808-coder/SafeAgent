@@ -20,7 +20,7 @@ from src.core.dependencies import get_db
 from src.database.models import PolicyModel, PolicyVersionModel
 from src.utils.policy_cache import get_policy_cache
 
-router = APIRouter(prefix="/v1/policy-compiler", tags=["policy-versions"])
+router = APIRouter(prefix="/v1/policy-compiler", tags=["policy-compiler"])
 
 
 # ──────────────────────────────────────────────────────────────

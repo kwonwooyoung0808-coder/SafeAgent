@@ -330,6 +330,7 @@ class PolicyConversionLogModel(Base):
     policy_id: Mapped[str | None] = mapped_column(
         String(80), ForeignKey("policies.id"), nullable=True, index=True
     )
+    requested_policy_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     fail_marker: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     original_filename: Mapped[str] = mapped_column(String(512))
     parsed_rules_count: Mapped[int] = mapped_column(Integer, default=0)

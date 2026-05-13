@@ -37,6 +37,7 @@ class Settings(BaseModel):
         str(Path("frontend") / "downloads" / "safeagent-deployment-bundle.zip"),
     )
     frontend_origin: str = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
+    app_timezone: str = os.getenv("APP_TIMEZONE", "Asia/Seoul")
 
     # ── 정책 분리 전략 (Stage A) ──
     # F1 (질의 검사) 는 모든 사용자에게 동일한 보편 안전 정책만 적용

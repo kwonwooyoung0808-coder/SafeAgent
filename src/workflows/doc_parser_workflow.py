@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import uuid
 from datetime import date
 from functools import lru_cache
@@ -7,10 +9,11 @@ from pathlib import Path
 
 import yaml
 from langgraph.graph import END, StateGraph
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from src.core.config import get_settings
 from src.database.connection import SessionLocal
-from src.database.models import PolicyConversionLogModel, PolicyModel
+from src.database.models import PolicyConversionLogModel, PolicyModel, PolicyVersionModel
 from src.engines.doc_parser_engine import run_two_step_llm_parse
 from src.engines.docx_chunk_processor import DocxChunkProcessor
 from src.engines.docx_engine import DocxEngine
@@ -48,6 +51,24 @@ _REGULATION_POLICY_KEYWORDS = (
     "점검",
     "기록",
 )
+
+
+def _safe_unlink_policy_artifact(path: Path, policy_dir: Path, policy_id: str) -> None:
+    """Delete only this request's policy artifact inside policy_dir."""
+    try:
+        resolved_dir = policy_dir.resolve()
+        resolved_path = path.resolve()
+    except OSError:
+        return
+    expected_name = f"{policy_id}.yaml"
+    tmp_prefix = f".{policy_id}."
+    is_expected_final = resolved_path.name == expected_name
+    is_expected_tmp = resolved_path.name.startswith(tmp_prefix) and resolved_path.suffix == ".tmp"
+    if resolved_path.parent == resolved_dir and (is_expected_final or is_expected_tmp):
+        try:
+            resolved_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _needs_draft_fallback(extracted: dict) -> bool:
@@ -214,10 +235,12 @@ async def llm_parser_agent_node(state: DocParserState) -> dict:
 def yaml_serializer_node(state: DocParserState) -> dict:
     """
     extracted_rules → 기존 Policy Pydantic 스키마(schemas/policy.py) 호환 YAML.
-    policy_id = "policy-{uuid8}"
+    policy_id comes from the upload form and is validated by the router.
     """
     ext = state.get("extracted_rules", {})
-    policy_id = f"policy-{str(uuid.uuid4())[:8]}"
+    policy_id = state.get("policy_id")
+    if not policy_id:
+        raise ValueError("policy_id is required for policy compiler output")
 
     forbidden_words: list[str] = ext.get("forbidden_words", [])
     compliance_checks: list[dict] = ext.get("compliance_checks", [])
@@ -365,20 +388,38 @@ def schema_validator_node(state: DocParserState) -> dict:
 # 노드 6: 저장 (YAML 파일 + DB INSERT)
 # ──────────────────────────────────────────────────────────────
 def storage_writer_node(state: DocParserState) -> dict:
-    """
-    1) YAML 파일 저장: {policy_dir}/{policy_id}.yaml (UTF-8)
-    2) policies INSERT (is_active=FALSE → Feature 1/2 즉시 영향 없음)
-    3) policy_conversion_logs INSERT
-    DB 실패 시 YAML은 보존, warnings에 기록.
-    """
+    """Persist YAML and DB rows, cleaning up only artifacts from this request."""
     settings = get_settings()
     policy_id = state["policy_id"]
     warnings = list(state.get("warnings", []))
 
     policy_dir = Path(settings.policy_dir)
     policy_dir.mkdir(parents=True, exist_ok=True)
-    yaml_path = str(policy_dir / f"{policy_id}.yaml")
-    Path(yaml_path).write_text(state["yaml_content"], encoding="utf-8")
+    final_path = policy_dir / f"{policy_id}.yaml"
+    yaml_path: str | None = str(final_path)
+    tmp_path: Path | None = None
+    final_created_by_request = False
+
+    if final_path.exists():
+        warnings.append(f"YAML 저장 실패: 이미 같은 policy_id 파일이 존재합니다: {final_path}")
+        return {"yaml_path": None, "warnings": warnings}
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            suffix=".tmp",
+            prefix=f".{policy_id}.",
+            dir=policy_dir,
+            delete=False,
+        ) as tmp:
+            tmp.write(state["yaml_content"])
+            tmp_path = Path(tmp.name)
+    except OSError as e:
+        warnings.append(f"YAML 임시 파일 저장 실패: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        return {"yaml_path": None, "warnings": warnings}
 
     try:
         eff_date = date.fromisoformat(state.get("effective_date", ""))
@@ -412,15 +453,60 @@ def storage_writer_node(state: DocParserState) -> dict:
         session.add(PolicyConversionLogModel(
             id=str(uuid.uuid4()),
             policy_id=policy_id,
+            requested_policy_id=policy_id,
             original_filename=Path(state["file_path"]).name,
             parsed_rules_count=parsed_count,
             conversion_status=status,
             warnings=warnings,
         ))
+        session.add(PolicyVersionModel(
+            id=str(uuid.uuid4()),
+            policy_id=policy_id,
+            version="1.0",
+            yaml_path=yaml_path,
+            yaml_snapshot=state["yaml_content"],
+            is_current=False,
+            activated_at=None,
+        ))
+        session.flush()
+        if tmp_path is None:
+            raise OSError("YAML temporary file is missing")
+        os.replace(tmp_path, final_path)
+        tmp_path = None
+        final_created_by_request = True
         session.commit()
+    except IntegrityError as e:
+        session.rollback()
+        warnings.append(f"DB 무결성 저장 실패로 YAML 산출물을 정리했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
+    except SQLAlchemyError as e:
+        session.rollback()
+        warnings.append(f"DB 저장 실패로 YAML 산출물을 정리했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
+    except OSError as e:
+        session.rollback()
+        warnings.append(f"YAML 최종 파일 저장 실패로 DB 저장을 취소했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
     except Exception as e:
         session.rollback()
-        warnings.append(f"DB 저장 실패 (YAML은 보존됨): {e}")
+        warnings.append(f"정책 저장 중 예상하지 못한 오류로 YAML 산출물을 정리했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
     finally:
         session.close()
 

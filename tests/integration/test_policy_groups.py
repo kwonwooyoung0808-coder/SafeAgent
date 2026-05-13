@@ -108,6 +108,49 @@ def test_update_members_invalid_policy_returns_422(client):
     assert r.status_code == 422
 
 
+def test_group_summary_includes_policies_agents_and_ungrouped(client, seeded_agent):
+    client.post(
+        "/v1/policy-groups",
+        json={"id": "GSUM", "name": "Summary", "policy_ids": ["CONTENT_001"]},
+    )
+    client.post(f"/api/agents/{seeded_agent['id']}/policy-groups", json={"group_id": "GSUM"})
+
+    body = client.get("/v1/policy-groups/summary").json()
+
+    assert body["total_groups"] == 1
+    group = body["groups"][0]
+    assert group["id"] == "GSUM"
+    assert group["policies"][0]["id"] == "CONTENT_001"
+    assert group["agents"][0]["id"] == seeded_agent["id"]
+    ungrouped_ids = {policy["id"] for policy in body["ungrouped_policies"]}
+    assert "CONTENT_002" in ungrouped_ids
+
+
+def test_list_groups_for_policy(client):
+    client.post(
+        "/v1/policy-groups",
+        json={"id": "GPOL", "name": "Policy lookup", "policy_ids": ["CONTENT_001"]},
+    )
+
+    body = client.get("/v1/policy-groups/policies/CONTENT_001/groups").json()
+
+    assert body["policy_id"] == "CONTENT_001"
+    assert body["total"] == 1
+    assert body["groups"][0]["id"] == "GPOL"
+
+
+def test_add_and_remove_single_policy_from_group(client):
+    client.post("/v1/policy-groups", json={"id": "GONE", "name": "Single"})
+
+    add = client.post("/v1/policy-groups/GONE/policies/CONTENT_001")
+    assert add.status_code == 201, add.text
+    assert add.json()["policy_ids"] == ["CONTENT_001"]
+
+    remove = client.delete("/v1/policy-groups/GONE/policies/CONTENT_001")
+    assert remove.status_code == 200, remove.text
+    assert remove.json()["policy_ids"] == []
+
+
 # ──────────────────────────────────────────────────────────────
 # Agent ↔ Group 매핑
 # ──────────────────────────────────────────────────────────────
