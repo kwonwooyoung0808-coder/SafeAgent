@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -6,6 +7,9 @@ import yaml
 from src.core.config import get_settings
 from src.schemas.judge import JudgeResult
 from src.schemas.policy import Policy
+
+
+logger = logging.getLogger(__name__)
 
 
 # Phase 3-B: 프롬프트 템플릿은 deploy 시점에 고정되므로 process-lifetime LRU 적합.
@@ -236,10 +240,10 @@ class JudgeEngine:
             if self.llm_client:
                 raw_llm_output = self.llm_client.generate(rendered_prompt)
             else:
-                raw_llm_output = None  # 테스트용
+                raw_llm_output = None
                 llm_unavailable = True
         except Exception as e:
-            print(f"Critical LLM Error: {e}")
+            logger.exception("Governance judge LLM call failed: %s", e)
             raw_llm_output = None
             llm_unavailable = True
 
@@ -249,7 +253,12 @@ class JudgeEngine:
             if policy.id == "GROUND_001":
                 parsed_result = self._judge_groundedness_fallback(response, retrieved_context)
             else:
-                parsed_result = JudgeResult(verdict="PASS", confidence=0.5, reason="Default Pass on Failure")
+                logger.warning("Judge LLM unavailable; semantic check skipped for policy_id=%s", policy.id)
+                parsed_result = JudgeResult(
+                    verdict="PASS",
+                    confidence=0.5,
+                    reason="Judge LLM unavailable; semantic check skipped.",
+                )
         else:
             parsed_result = self._parse_llm_json_result(raw_llm_output)
 

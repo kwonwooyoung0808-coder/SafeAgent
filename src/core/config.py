@@ -42,6 +42,9 @@ class Settings(BaseModel):
     # F1 (질의 검사) 는 모든 사용자에게 동일한 보편 안전 정책만 적용
     # F2 (응답 검증) 는 시스템 정책 + agent 의 부서별 정책을 결합
     system_input_policy_id: str = os.getenv("SYSTEM_INPUT_POLICY_ID", "CONTENT_001")
+    default_company_policy_group_id: str = os.getenv(
+        "DEFAULT_COMPANY_POLICY_GROUP_ID", "GLOBAL_COMPANY_RULES"
+    )
 
     # ── F2 Self-Consistency Check (PRD §5.2.2) ──
     # True  : Judge LLM 을 temp=0.0 / temp=0.7 로 2회 병렬 호출 후 verdict 비교 (정확도 ↑, latency ↑)
@@ -58,6 +61,11 @@ class Settings(BaseModel):
     governance_llm_temperature: float = float(
         os.getenv("GOVERNANCE_LLM_TEMPERATURE", os.getenv("OLLAMA_TEMPERATURE", "0.1"))
     )
+
+    # ── Policy Compiler runtime guards ──
+    # 한국식 조문 문서는 구조화 draft를 우선 사용하고, 비조문 대형 문서만 제한된 LLM 청킹 처리.
+    policy_compiler_timeout_seconds: int = int(os.getenv("POLICY_COMPILER_TIMEOUT_SECONDS", "300"))
+    policy_compiler_max_llm_chunks: int = int(os.getenv("POLICY_COMPILER_MAX_LLM_CHUNKS", "4"))
 
     # ── Sovereign AI (검사 대상 회사 AI) ──
     sovereign_ai_url: str = os.getenv(
@@ -87,6 +95,7 @@ class Settings(BaseModel):
     # ── 환경 구분 ──
     # development | production. 운영 환경에서는 추가 보안 검증 활성화.
     app_env: str = os.getenv("APP_ENV", "development").lower()
+    demo_auth_bypass: bool = os.getenv("DEMO_AUTH_BYPASS", "false").lower() == "true"
 
     # ── Phase 4: 인증/권한 ──
     # JWT_SECRET 은 운영 환경에서 반드시 32바이트 이상 랜덤 문자열로 교체 (RFC 7518 §3.2).
@@ -122,6 +131,11 @@ def _validate_auth_settings(settings: "Settings") -> None:
         raise ValueError(
             "운영 환경(APP_ENV=production)에서 BOOTSTRAP_ADMIN_PASSWORD 가 "
             "취약한 기본값입니다. 강력한 비밀번호로 교체하세요."
+        )
+    if settings.app_env == "production" and settings.demo_auth_bypass:
+        raise ValueError(
+            "DEMO_AUTH_BYPASS=true 는 production 환경에서 사용할 수 없습니다. "
+            "운영에서는 JWT/API Key 인증을 반드시 활성화하세요."
         )
 
 
