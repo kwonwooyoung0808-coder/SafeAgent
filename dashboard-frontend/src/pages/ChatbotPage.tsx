@@ -33,6 +33,13 @@ interface ChatHistory {
   timestamp: Date;
 }
 
+interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  status: string;
+}
+
 export const ChatbotPage = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -50,7 +57,25 @@ export const ChatbotPage = () => {
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const fetchAgents = async () => {
+      try {
+        const response = await api.get('/api/agents');
+        const agentList = response.data;
+        setAgents(agentList);
+        if (agentList.length > 0) {
+          setSelectedAgent(agentList[0]);
+        }
+      } catch (error) {
+        console.error('Failed to fetch agents:', error);
+      }
+    };
+    fetchAgents();
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -91,8 +116,8 @@ export const ChatbotPage = () => {
       // 1. 백엔드 보안 프록시 호출: POST /v1/proxy/chat
       const response = await api.post('/v1/proxy/chat', {
         query: userText,
-        agent_id: "AGENT-FINANCE-01",
-        context: `User: demo_employee, Dept: Security` // 객체에서 문자열로 변경
+        agent_id: selectedAgent?.id || "AGENT-FINANCE-01",
+        context: `User: ${user?.id || 'demo_employee'}, Dept: Security` // 객체에서 문자열로 변경
       });
 
       const data = response.data;
@@ -209,10 +234,14 @@ export const ChatbotPage = () => {
                  <Shield className="w-5 h-5 text-primary" />
               </div>
               <div>
-                <h1 className="text-sm font-black text-on-surface tracking-tight uppercase">SafeAgent Chat</h1>
+                <h1 className="text-sm font-black text-on-surface tracking-tight uppercase">
+                  {selectedAgent ? `${selectedAgent.name} Chat` : 'SafeAgent Chat'}
+                </h1>
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
-                  <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">Active Security Guard</span>
+                  <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">
+                    {selectedAgent ? 'Active Security Guard' : 'Loading Security Guard...'}
+                  </span>
                 </div>
               </div>
            </div>
