@@ -184,14 +184,7 @@ class SovereignAIClient:
             ],
         }
         async with httpx.AsyncClient(timeout=180.0) as client:
-            # 디버깅을 위한 print 코드 추가 (사용자 요청)
-            print(f"[DEBUG] Calling Sovereign AI: {self.base_url}/api/chat")
-            print(f"[DEBUG] Payload: {payload}")
-            
             response = await client.post(f"{self.base_url}/api/chat", json=payload)
-            
-            print(f"[DEBUG] Response Status: {response.status_code}")
-            
             response.raise_for_status()
             data = response.json()
         return _strip_thinking(data.get("message", {}).get("content", ""))
