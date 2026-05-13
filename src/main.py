@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,7 @@ from src.routers import (
 )
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -38,6 +40,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _validate_sovereign_url(settings.sovereign_ai_url)
     # 인증 설정 검증 (RFC 7518 §3.2 JWT_SECRET 32B+ / 운영 환경 약한 admin pw 차단)
     _validate_auth_settings(settings)
+    if settings.demo_auth_bypass:
+        logger.warning(
+            "[SECURITY] DEMO_AUTH_BYPASS is enabled. JWT/API Key checks are bypassed "
+            "for local demo only; production startup rejects this setting."
+        )
 
     app.state.db_available = init_db()
     yield
@@ -55,7 +62,8 @@ app.add_middleware(
 
 # Phase 4 인증 적용 패턴:
 #   - 공개: /health, /v1/auth/login, /v1/auth/refresh
-#   - API Key (머신): /v1/input-guard, /v1/response-guard, /v1/proxy, /api/v1/evaluate
+#   - API Key (머신): /v1/input-guard, /v1/response-guard, /v1/proxy
+#   - JWT (관리 도구): /api/v1/evaluate 및 관리/조회 API
 #   - JWT (사람, 모든 role): 그 외 관리/조회 API
 #   - 세분화 role: api_keys.router 는 per-endpoint 적용 / 정책 활성화 admin-only 는 Phase 5
 _jwt_any = [Depends(require_role("admin", "operator", "viewer"))]
@@ -84,7 +92,7 @@ app.include_router(inquiry.router, dependencies=_jwt_any)
 app.include_router(violation_reports.router, dependencies=_jwt_any)
 app.include_router(policy_groups.router, dependencies=_jwt_any)
 app.include_router(policy_versions.router, dependencies=_jwt_any)
-app.include_router(updates.router)
+app.include_router(updates.router, dependencies=_jwt_any)
 
 # api_keys.router 는 per-endpoint role 체크가 이미 적용됨.
 app.include_router(api_keys.router)

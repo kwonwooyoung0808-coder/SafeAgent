@@ -22,6 +22,7 @@ def _extract_json(raw: str) -> dict:
 async def run_two_step_llm_parse(
     sanitized_text: str,
     client: OllamaClient | None = None,
+    structured_context: str | None = None,
 ) -> tuple[dict, list[str]]:
     """
     NL-to-Format 2단계 분리 파싱.
@@ -62,7 +63,9 @@ async def run_two_step_llm_parse(
     try:
         reasoning = await client.chat(
             system_prompt="",
-            user_message=step1_tpl.replace("{sanitized_raw_text}", sanitized_text),
+            user_message=step1_tpl
+            .replace("{sanitized_raw_text}", sanitized_text)
+            .replace("{structured_context}", structured_context or sanitized_text),
             temperature=0.1,
         )
     except Exception as e:
