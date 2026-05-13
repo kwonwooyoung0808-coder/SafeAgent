@@ -69,3 +69,9 @@ if _parsed.database != "safeagent_test":
 # ── ④ DATABASE_URL을 테스트 URL로 덮어쓰기 ──────────────────────
 # src.* 모듈이 import될 때 이 값을 보고 engine을 생성함
 os.environ["DATABASE_URL"] = _TEST_URL
+
+
+# ── ⑤ 테스트 환경에서는 인증 우회를 강제 비활성 ──────────────────
+# .env에 DEMO_AUTH_BYPASS=true가 있어도 테스트는 실제 인증 흐름을 검증해야 함.
+# get_settings()의 @lru_cache가 src.* import 시점에 굳기 때문에 여기서 미리 덮어씀.
+os.environ["DEMO_AUTH_BYPASS"] = "false"
