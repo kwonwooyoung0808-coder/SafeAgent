@@ -16,6 +16,7 @@ venv/
 # DB
 *.sqlite
 governance.db
+safeagent.db
 
 # policy
 policymd/
@@ -29,3 +30,7 @@ src/policies/failed_uploads/
 # 배포용으로 생성되는 대용량 산출물은 Git에 포함하지 않음
 frontend/downloads/*.tar
 frontend/downloads/*.zip
+
+# Dashboard frontend node_modules
+dashboard-frontend/node_modules/
+dashboard-frontend/dist/
