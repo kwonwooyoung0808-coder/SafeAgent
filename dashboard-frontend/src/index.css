@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Manrope", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Colors based on Enterprise Security Sentinel Design System - Updated to Green/Ivory */
+  --color-surface: #fdfbf7;
+  --color-surface-dim: #f3f2ee;
+  --color-surface-bright: #ffffff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f9f8f4;
+  --color-surface-container: #f4f3ef;
+  --color-surface-container-high: #eeede9;
+  --color-surface-container-highest: #e8e7e3;
+  
+  --color-on-surface: #1c1c1a;
+  --color-on-surface-variant: #484841;
+  
+  --color-primary: #436843;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #436843;
+  --color-on-primary-container: #fdfbf7;
+  
+  --color-secondary: #586150;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #dce6d1;
+  --color-on-secondary-container: #161e11;
+  
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #93000a;
+
+  --color-outline: #74777f;
+  --color-outline-variant: #c4c6cf;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-on-surface font-sans;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight;
+  }
+}
+
+.glass-panel {
+  @apply bg-surface-container-lowest/70 backdrop-blur-xl border border-on-surface/5 shadow-sm;
+}
