@@ -3,9 +3,6 @@ import axios from 'axios';
 // baseURL을 빈 값으로 설정하여 각 서비스별 프리픽스 대응 가능하도록 변경
 export const api = axios.create({
   baseURL: '', 
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 // Request Interceptor: 토큰 자동 주입 (기존 호환성 유지)
@@ -17,6 +14,15 @@ api.interceptors.request.use(
         const parsed = JSON.parse(savedUser);
         if (parsed.access_token && config.headers) {
           config.headers.Authorization = `Bearer ${parsed.access_token}`;
+          
+          // 서버의 /v1/proxy, /v1/input-guard 등 머신용 엔드포인트 대응을 위한 API Key 추가
+          // 서버가 DEMO_AUTH_BYPASS=true 인 경우 값에 상관없이 통과되며, 
+          // 운영 환경에서는 실제 발급된 키를 사용해야 합니다.
+          if (config.url?.includes('/v1/proxy') || 
+              config.url?.includes('/v1/input-guard') || 
+              config.url?.includes('/v1/response-guard')) {
+            config.headers['X-API-Key'] = 'sak_dashboard_demo_key_default';
+          }
         }
       } catch (error) {
         console.error('Failed to parse user from localStorage', error);
