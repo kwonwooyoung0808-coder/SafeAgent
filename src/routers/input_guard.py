@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
 from src.core.dependencies import get_db, get_trace_id
-from src.database.models import AgentModel, PolicyModel
+from src.core.guards import get_active_agent_or_422, get_active_system_policy_or_500
 from src.schemas.query_risk import QueryCheckRequest, QueryCheckResponse
 from src.services.violation_reporter import report_violation
 from src.workflows.input_guard_workflow import build_input_guard_graph
@@ -28,30 +28,11 @@ async def input_guard_check(
     """
     settings = get_settings()
 
-    agent = db.query(AgentModel).filter(
-        AgentModel.id == request.agent_id,
-        AgentModel.status == "ACTIVE",
-    ).first()
-    if not agent:
-        raise HTTPException(
-            status_code=422,
-            detail=f"agent_id={request.agent_id} 없음 또는 비활성",
-        )
+    get_active_agent_or_422(db, request.agent_id)
 
     # F1 은 시스템 입력 정책만 사용
     system_policy_id = settings.system_input_policy_id
-    policy = db.query(PolicyModel).filter(
-        PolicyModel.id == system_policy_id,
-        PolicyModel.is_active == True,
-    ).first()
-    if not policy:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"시스템 입력 정책 '{system_policy_id}' 미설정 또는 비활성. "
-                f"관리자가 SYSTEM_INPUT_POLICY_ID 환경변수를 확인해야 합니다."
-            ),
-        )
+    get_active_system_policy_or_500(db, system_policy_id)
 
     graph = build_input_guard_graph()
     final: dict = await graph.ainvoke({

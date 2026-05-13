@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.core.dependencies import get_db, get_trace_id
-from src.database.models import AgentModel, PolicyModel
+from src.core.guards import get_active_agent_or_422, validate_combined_policies_active
 from src.schemas.compliance import ViolationDetail
 from src.core.config import get_settings
 from src.schemas.proxy import ProxyChatRequest, ProxyChatResponse
@@ -50,15 +50,7 @@ async def proxy_chat(
     # ── 사전 검증 (FK 무결성) ──────────────────────────────────
     settings = get_settings()
 
-    agent = db.query(AgentModel).filter(
-        AgentModel.id == request.agent_id,
-        AgentModel.status == "ACTIVE",
-    ).first()
-    if not agent:
-        raise HTTPException(
-            status_code=422,
-            detail=f"agent_id={request.agent_id} 없음 또는 비활성",
-        )
+    agent = get_active_agent_or_422(db, request.agent_id)
 
     # Stage A 정책 분리 전략 + Phase 2-C 그룹 결합
     # F1: 시스템 입력 정책만 사용 (보편 안전 필터)
@@ -72,16 +64,7 @@ async def proxy_chat(
     )
 
     # 모든 결합 정책이 활성 상태여야 함
-    for pid in f2_policy_ids:
-        exists = db.query(PolicyModel).filter(
-            PolicyModel.id == pid,
-            PolicyModel.is_active == True,
-        ).first()
-        if not exists:
-            raise HTTPException(
-                status_code=422,
-                detail=f"policy_id={pid} 없음 또는 미활성 (결합 대상: {f2_policy_ids})",
-            )
+    validate_combined_policies_active(db, f2_policy_ids)
 
     # ── ① Feature 1: 질의 위험 감지 (시스템 정책 고정) ────────
     query_graph = build_input_guard_graph()
