@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
 from src.core.dependencies import get_db, get_trace_id
-from src.database.models import AgentModel, PolicyModel, QueryAuditLogModel
+from src.core.guards import get_active_agent_or_422, validate_combined_policies_active
+from src.database.models import QueryAuditLogModel
 from src.schemas.compliance import (
     ResponseValidateRequest,
     ResponseValidateResponse,
@@ -33,15 +34,7 @@ async def response_guard_validate(
     """
     settings = get_settings()
 
-    agent = db.query(AgentModel).filter(
-        AgentModel.id == request.agent_id,
-        AgentModel.status == "ACTIVE",
-    ).first()
-    if not agent:
-        raise HTTPException(
-            status_code=422,
-            detail=f"agent_id={request.agent_id} 없음 또는 비활성",
-        )
+    agent = get_active_agent_or_422(db, request.agent_id)
 
     system_policy_id = settings.system_input_policy_id
 
@@ -54,16 +47,7 @@ async def response_guard_validate(
     )
 
     # FK 사전 검증 — 모든 정책이 활성 상태여야 함
-    for pid in policy_ids:
-        exists = db.query(PolicyModel).filter(
-            PolicyModel.id == pid,
-            PolicyModel.is_active == True,
-        ).first()
-        if not exists:
-            raise HTTPException(
-                status_code=422,
-                detail=f"policy_id={pid} 없음 또는 미활성 (결합 대상: {policy_ids})",
-            )
+    validate_combined_policies_active(db, policy_ids)
 
     # Feature 1 연결 ID 유효성 검증 (선택적)
     if request.audit_query_id:
