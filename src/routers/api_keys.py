@@ -20,7 +20,7 @@ from src.core.auth import generate_api_key
 from src.core.dependencies import AuthenticatedUser, get_db, require_role
 from src.database.models import AgentModel, ApiKeyModel
 
-router = APIRouter(prefix="/api/agents", tags=["api-keys"])
+router = APIRouter(prefix="/api/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
 
 

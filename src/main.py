@@ -50,7 +50,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+openapi_tags = [
+    {"name": "health", "description": "운영 모니터링 — 헬스체크 (공개)."},
+    {"name": "auth", "description": "Phase 4 인증 — login/refresh/me/password."},
+    {"name": "input-guard", "description": "게이트웨이: 입력 검사 (Sovereign AI Agent → API Key 인증)."},
+    {"name": "response-guard", "description": "게이트웨이: 응답 검사 (Sovereign AI Agent → API Key 인증)."},
+    {"name": "proxy", "description": "게이트웨이: chat proxy (Sovereign AI Agent → API Key 인증)."},
+    {"name": "policy-compiler", "description": "정책 라이프사이클 — 컴파일 → draft 검토/수정 → activate → version 관리. 같은 tag로 정책 버전 API도 함께 표시됩니다."},
+    {"name": "policy-groups", "description": "정책 그룹 CRUD + 멤버 관리. summary가 운영자 대시보드 진입점입니다."},
+    {"name": "agents", "description": "Sovereign AI Agent 등록/조회/정책 그룹 연결 + API Key 발급/관리(같은 tag로 통합)."},
+    {"name": "runs", "description": "워크플로 실행 기록 조회."},
+    {"name": "violations", "description": "위반 이벤트 조회/요약."},
+    {"name": "violation-reports", "description": "위반 보고서."},
+    {"name": "audit", "description": "쿼리/응답 감사 로그."},
+    {"name": "inquiry", "description": "운영 문의 처리."},
+    {"name": "updates", "description": "정책/시스템 업데이트 알림."},
+    {"name": "evaluate", "description": "[레거시] 평가 도구 — 관리자 전용."},
+]
+
+app = FastAPI(
+    title=settings.app_name,
+    version="0.1.0",
+    lifespan=lifespan,
+    openapi_tags=openapi_tags,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin, "http://127.0.0.1:3000"],
@@ -82,17 +105,21 @@ app.include_router(proxy.router, dependencies=_machine)
 app.include_router(evaluate.router, dependencies=_jwt_any)  # 레거시 평가 도구 (관리자용)
 
 # 관리 / 조회 API — JWT 필요 (모든 role 허용, 세분화는 Phase 5)
-app.include_router(runs.router, dependencies=_jwt_any)
-app.include_router(violations.router, dependencies=_jwt_any)
-app.include_router(audit.router, dependencies=_jwt_any)
-app.include_router(audit.query_audit_router, dependencies=_jwt_any)
+# 정책 라이프사이클: compiler → versions (같은 tag=policy-compiler 로 묶여 표시됨)
 app.include_router(policy_compiler.router, dependencies=_jwt_any)
-app.include_router(agents.router, dependencies=_jwt_any)
-app.include_router(inquiry.router, dependencies=_jwt_any)
-app.include_router(violation_reports.router, dependencies=_jwt_any)
-app.include_router(policy_groups.router, dependencies=_jwt_any)
 app.include_router(policy_versions.router, dependencies=_jwt_any)
-app.include_router(updates.router, dependencies=_jwt_any)
+app.include_router(policy_groups.router, dependencies=_jwt_any)
 
+# Agent 관리: agents → api_keys (같은 tag=agents 로 묶여 표시됨)
+app.include_router(agents.router, dependencies=_jwt_any)
 # api_keys.router 는 per-endpoint role 체크가 이미 적용됨.
 app.include_router(api_keys.router)
+
+# 감사 / 운영 조회
+app.include_router(runs.router, dependencies=_jwt_any)
+app.include_router(violations.router, dependencies=_jwt_any)
+app.include_router(violation_reports.router, dependencies=_jwt_any)
+app.include_router(audit.router, dependencies=_jwt_any)
+app.include_router(audit.query_audit_router, dependencies=_jwt_any)
+app.include_router(inquiry.router, dependencies=_jwt_any)
+app.include_router(updates.router, dependencies=_jwt_any)

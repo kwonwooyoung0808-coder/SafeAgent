@@ -18,6 +18,14 @@ class AgentCreate(BaseModel):
     policy_id: str | None = Field(
         default=None, description="연결할 활성 정책 ID. 미지정 시 추후 PUT으로 연결."
     )
+    department_group_id: str | None = Field(
+        default=None,
+        description="Agent department policy group ID. The group is assigned on create.",
+    )
+    policy_group_ids: list[str] = Field(
+        default_factory=list,
+        description="Additional policy group IDs assigned on create.",
+    )
     status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
 
 
@@ -28,6 +36,7 @@ class AgentResponse(BaseModel):
     name: str
     description: str | None = None
     policy_id: str | None = None
+    policy_group_ids: list[str] = Field(default_factory=list)
     status: str
     created_at: datetime
     updated_at: datetime

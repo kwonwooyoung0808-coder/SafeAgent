@@ -6,13 +6,15 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from src.core.dependencies import get_db
-from pydantic import BaseModel
+from src.core.config import get_settings
+from src.core.dependencies import AuthenticatedUser, get_current_user, get_db
+from pydantic import BaseModel, Field
 
 from src.database.models import (
     AgentModel,
     AgentPolicyGroupMappingModel,
     PolicyGroupModel,
+    PolicyGroupMemberModel,
     PolicyModel,
     QueryAuditLogModel,
     ResponseAuditLogModel,
@@ -20,6 +22,98 @@ from src.database.models import (
 from src.schemas.agent import AgentCreate, AgentPolicyUpdate, AgentResponse
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
+
+
+def _agent_group_ids(db: Session, agent_id: str) -> list[str]:
+    rows = (
+        db.query(AgentPolicyGroupMappingModel.group_id)
+        .filter(AgentPolicyGroupMappingModel.agent_id == agent_id)
+        .order_by(
+            AgentPolicyGroupMappingModel.created_at.asc(),
+            AgentPolicyGroupMappingModel.group_id.asc(),
+        )
+        .all()
+    )
+    group_ids = [row[0] for row in rows]
+    company_group_id = get_settings().default_company_policy_group_id
+    if company_group_id in group_ids:
+        group_ids.remove(company_group_id)
+        return [company_group_id, *group_ids]
+    return group_ids
+
+
+def _to_agent_response(db: Session, agent: AgentModel) -> AgentResponse:
+    return AgentResponse(
+        id=agent.id,
+        name=agent.name,
+        description=agent.description,
+        policy_id=agent.policy_id,
+        policy_group_ids=_agent_group_ids(db, agent.id),
+        status=agent.status,
+        created_at=agent.created_at,
+        updated_at=agent.updated_at,
+    )
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _validate_groups_exist(db: Session, group_ids: list[str]) -> None:
+    unique_ids = _dedupe_preserve_order(group_ids)
+    if not unique_ids:
+        return
+    found = {
+        row[0]
+        for row in db.query(PolicyGroupModel.id)
+        .filter(PolicyGroupModel.id.in_(unique_ids))
+        .all()
+    }
+    missing = [group_id for group_id in unique_ids if group_id not in found]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"policy group not found: {', '.join(missing)}",
+        )
+
+
+def _configured_company_group_ids(db: Session) -> list[str]:
+    group_id = get_settings().default_company_policy_group_id
+    if not group_id:
+        return []
+    exists = db.query(PolicyGroupModel.id).filter(PolicyGroupModel.id == group_id).first()
+    return [group_id] if exists else []
+
+
+def _agent_requested_group_ids(
+    db: Session,
+    department_group_id: str | None,
+    policy_group_ids: list[str],
+    include_company_default: bool = True,
+) -> list[str]:
+    group_ids: list[str] = []
+    if include_company_default:
+        group_ids.extend(_configured_company_group_ids(db))
+    if department_group_id:
+        group_ids.append(department_group_id)
+    group_ids.extend(policy_group_ids)
+    return _dedupe_preserve_order(group_ids)
+
+
+def _assign_groups(db: Session, agent_id: str, group_ids: list[str]) -> None:
+    for group_id in _dedupe_preserve_order(group_ids):
+        exists = db.query(AgentPolicyGroupMappingModel).filter(
+            AgentPolicyGroupMappingModel.agent_id == agent_id,
+            AgentPolicyGroupMappingModel.group_id == group_id,
+        ).first()
+        if not exists:
+            db.add(AgentPolicyGroupMappingModel(agent_id=agent_id, group_id=group_id))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -48,6 +142,13 @@ def create_agent(payload: AgentCreate, db: Session = Depends(get_db)) -> AgentRe
                 detail=f"policy_id={payload.policy_id} 없음 또는 미활성",
             )
 
+    group_ids = _agent_requested_group_ids(
+        db,
+        department_group_id=payload.department_group_id,
+        policy_group_ids=payload.policy_group_ids,
+    )
+    _validate_groups_exist(db, group_ids)
+
     now = datetime.now(timezone.utc)
     agent = AgentModel(
         id=agent_id,
@@ -59,18 +160,12 @@ def create_agent(payload: AgentCreate, db: Session = Depends(get_db)) -> AgentRe
         updated_at=now,
     )
     db.add(agent)
+    db.flush()
+    _assign_groups(db, agent.id, group_ids)
     db.commit()
     db.refresh(agent)
 
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        description=agent.description,
-        policy_id=agent.policy_id,
-        status=agent.status,
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
-    )
+    return _to_agent_response(db, agent)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -89,18 +184,7 @@ def list_agents(
     if status:
         q = q.filter(AgentModel.status == status)
     rows = q.order_by(AgentModel.created_at.desc()).all()
-    return [
-        AgentResponse(
-            id=a.id,
-            name=a.name,
-            description=a.description,
-            policy_id=a.policy_id,
-            status=a.status,
-            created_at=a.created_at,
-            updated_at=a.updated_at,
-        )
-        for a in rows
-    ]
+    return [_to_agent_response(db, a) for a in rows]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -112,15 +196,7 @@ def get_agent(agent_id: str, db: Session = Depends(get_db)) -> AgentResponse:
     if not agent:
         raise HTTPException(status_code=404, detail=f"agent_id={agent_id} 없음")
 
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        description=agent.description,
-        policy_id=agent.policy_id,
-        status=agent.status,
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
-    )
+    return _to_agent_response(db, agent)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -155,15 +231,7 @@ def update_agent_policy(
     db.commit()
     db.refresh(agent)
 
-    return AgentResponse(
-        id=agent.id,
-        name=agent.name,
-        description=agent.description,
-        policy_id=agent.policy_id,
-        status=agent.status,
-        created_at=agent.created_at,
-        updated_at=agent.updated_at,
-    )
+    return _to_agent_response(db, agent)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -174,6 +242,7 @@ def get_agent_audit(
     agent_id: str,
     limit: int = 50,
     db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict:
     """
     에이전트의 query / response 감사 이력 조회.
@@ -202,7 +271,8 @@ def get_agent_audit(
         "query_audits": [
             {
                 "audit_id":     q.id,
-                "query":        q.query,
+                "query":        q.query if user.role == "admin" else q.masked_query,
+                "masked_query": q.masked_query,
                 "status":       q.status,
                 "risk_score":   q.risk_score,
                 "action_taken": q.action_taken,
@@ -231,6 +301,12 @@ def get_agent_audit(
 
 class AgentGroupAssign(BaseModel):
     group_id: str
+
+
+class AgentGroupsReplace(BaseModel):
+    department_group_id: str | None = None
+    policy_group_ids: list[str] = Field(default_factory=list)
+    include_company_default: bool = True
 
 
 class AgentGroupListItem(BaseModel):
@@ -278,6 +354,32 @@ def assign_group(
     return {"agent_id": agent_id, "group_id": payload.group_id, "assigned": True}
 
 
+@router.put("/{agent_id}/policy-groups", response_model=AgentResponse)
+def replace_agent_groups(
+    agent_id: str,
+    payload: AgentGroupsReplace,
+    db: Session = Depends(get_db),
+) -> AgentResponse:
+    """Replace all agent policy group mappings using set semantics."""
+    agent = _ensure_agent(db, agent_id)
+    group_ids = _agent_requested_group_ids(
+        db,
+        department_group_id=payload.department_group_id,
+        policy_group_ids=payload.policy_group_ids,
+        include_company_default=payload.include_company_default,
+    )
+    _validate_groups_exist(db, group_ids)
+
+    db.query(AgentPolicyGroupMappingModel).filter(
+        AgentPolicyGroupMappingModel.agent_id == agent_id,
+    ).delete(synchronize_session=False)
+    _assign_groups(db, agent_id, group_ids)
+    agent.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(agent)
+    return _to_agent_response(db, agent)
+
+
 @router.delete("/{agent_id}/policy-groups/{group_id}", status_code=204, response_class=Response)
 def unassign_group(
     agent_id: str,
@@ -304,8 +406,6 @@ def list_agent_groups(
     db: Session = Depends(get_db),
 ) -> list[AgentGroupListItem]:
     _ensure_agent(db, agent_id)
-
-    from src.database.models import PolicyGroupMemberModel
 
     rows = (
         db.query(PolicyGroupModel)

@@ -11,6 +11,7 @@
 | 001 | `001_phase2_trace_id_and_masking.sql` | `trace_id`, `masked_query`, `masked_response`, `pii_detected` 컬럼 추가 |
 | 002 | `002_phase2c_policy_groups.sql` | `policy_groups`, `policy_group_members`, `agent_policy_group_mapping` 테이블 생성 |
 | 003 | `003_phase3a_policy_versions.sql` | `policy_versions` 테이블 + `policy_version` 컬럼 + 기존 정책 v1 시드 |
+| 004 | `004_policy_compiler_review_safety.sql` | Policy Compiler 실패 로그의 요청 `policy_id` 추적 컬럼 추가 |
 
 각 SQL 은 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 사용으로 **멱등** — 여러 번 실행해도 안전.
 
@@ -23,6 +24,7 @@ set PGPASSWORD=a1234
 "C:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -p 5433 -U postgres -d safeagent -f migrations/001_phase2_trace_id_and_masking.sql
 "C:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -p 5433 -U postgres -d safeagent -f migrations/002_phase2c_policy_groups.sql
 "C:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -p 5433 -U postgres -d safeagent -f migrations/003_phase3a_policy_versions.sql
+"C:\Program Files\PostgreSQL\18\bin\psql.exe" -h localhost -p 5433 -U postgres -d safeagent -f migrations/004_policy_compiler_review_safety.sql
 ```
 
 성공 시 각 파일마다 `ALTER TABLE` / `CREATE TABLE` / `CREATE INDEX` 메시지 출력.
@@ -41,6 +43,9 @@ set PGPASSWORD=a1234
 -- 컬럼 추가 확인
 SELECT column_name FROM information_schema.columns
 WHERE table_name = 'query_audit_logs' AND column_name IN ('trace_id', 'masked_query', 'pii_detected', 'policy_version');
+
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'policy_conversion_logs' AND column_name = 'requested_policy_id';
 
 -- 테이블 생성 확인
 SELECT table_name FROM information_schema.tables

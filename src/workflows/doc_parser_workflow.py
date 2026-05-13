@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import uuid
 from datetime import date
 from functools import lru_cache
@@ -7,14 +9,16 @@ from pathlib import Path
 
 import yaml
 from langgraph.graph import END, StateGraph
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from src.core.config import get_settings
 from src.database.connection import SessionLocal
-from src.database.models import PolicyConversionLogModel, PolicyModel
+from src.database.models import PolicyConversionLogModel, PolicyModel, PolicyVersionModel
 from src.engines.doc_parser_engine import run_two_step_llm_parse
 from src.engines.docx_chunk_processor import DocxChunkProcessor
 from src.engines.docx_engine import DocxEngine
 from src.engines.grounding_validator import GroundingValidator
+from src.engines.korean_regulation_parser import regulation_to_llm_context
 from src.schemas.doc_parser import DocParserState
 from src.schemas.policy import Policy
 
@@ -28,6 +32,87 @@ def _map_action_type(action_value: str | None) -> str:
     if action_value == "BLOCK":
         return "BLOCK"
     return "LOG"
+
+
+_REGULATION_POLICY_KEYWORDS = (
+    "하여야",
+    "해야",
+    "한다",
+    "금지",
+    "불가",
+    "제한",
+    "승인",
+    "보고",
+    "관리",
+    "보호",
+    "보안",
+    "비밀",
+    "책임",
+    "점검",
+    "기록",
+)
+
+
+def _safe_unlink_policy_artifact(path: Path, policy_dir: Path, policy_id: str) -> None:
+    """Delete only this request's policy artifact inside policy_dir."""
+    try:
+        resolved_dir = policy_dir.resolve()
+        resolved_path = path.resolve()
+    except OSError:
+        return
+    expected_name = f"{policy_id}.yaml"
+    tmp_prefix = f".{policy_id}."
+    is_expected_final = resolved_path.name == expected_name
+    is_expected_tmp = resolved_path.name.startswith(tmp_prefix) and resolved_path.suffix == ".tmp"
+    if resolved_path.parent == resolved_dir and (is_expected_final or is_expected_tmp):
+        try:
+            resolved_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _needs_draft_fallback(extracted: dict) -> bool:
+    return not (
+        extracted.get("forbidden_words")
+        or extracted.get("compliance_checks")
+        or extracted.get("actions")
+    )
+
+
+def _build_draft_rules_from_regulation(regulation: dict) -> dict:
+    """LLM 추출이 비었을 때 한국식 조문 구조에서 검토용 정책 draft를 만든다."""
+    checks: list[dict] = []
+    for article in regulation.get("articles", []):
+        source_text = article.get("source_text", "").strip()
+        if not source_text:
+            continue
+        if not any(keyword in source_text for keyword in _REGULATION_POLICY_KEYWORDS):
+            continue
+        article_label = f"제{article.get('article_no')}조"
+        title = article.get("title") or ""
+        checks.append({
+            "id": f"CC-{len(checks) + 1:03d}",
+            "description": f"{article_label}({title}) 준수 여부 확인: {source_text[:220]}",
+            "severity": "MEDIUM",
+            "source_article": article_label,
+            "source_text": source_text[:1200],
+            "needs_review": True,
+        })
+        if len(checks) >= 80:
+            break
+
+    return {
+        "forbidden_words": [],
+        "compliance_checks": checks,
+        "actions": {
+            "on_forbidden_word": "LOG",
+            "on_compliance_fail": "LOG",
+        },
+        "warnings": [
+            "LLM 추출 결과가 비어 있거나 부족하여 한국식 조문 파서 기반 검토용 draft를 생성했습니다.",
+            "severity/action은 문서에 명시되지 않은 경우 MEDIUM/LOG로 보수 적용했습니다.",
+        ],
+    }
 
 
 # ──────────────────────────────────────────────────────────────
@@ -89,22 +174,55 @@ async def llm_parser_agent_node(state: DocParserState) -> dict:
 
     raw_text = state.get("raw_text", "")
     doc_structure = state.get("doc_structure", {})
+    regulation = doc_structure.get("korean_regulation", {})
+    structured_context = regulation_to_llm_context(regulation)
     processor = DocxChunkProcessor()
     all_warnings = list(state.get("warnings", []))
+    article_count = regulation.get("stats", {}).get("article_count", 0)
+
+    if article_count:
+        extracted = _build_draft_rules_from_regulation(regulation)
+        all_warnings.extend(extracted.get("warnings", []))
+        all_warnings.append(
+            f"INFO: 한국식 조문 {article_count}개를 구조화 draft로 변환했습니다. "
+            "장시간 LLM 청킹은 건너뜁니다."
+        )
+        return {"extracted_rules": extracted, "warnings": all_warnings}
 
     if len(raw_text) <= DocxChunkProcessor.MAX_CHARS_PER_CHUNK:
-        extracted, parse_warnings = await run_two_step_llm_parse(raw_text)
+        extracted, parse_warnings = await run_two_step_llm_parse(
+            raw_text,
+            structured_context=structured_context,
+        )
         all_warnings.extend(parse_warnings)
+        if _needs_draft_fallback(extracted):
+            extracted = _build_draft_rules_from_regulation(regulation)
+            all_warnings.extend(extracted.get("warnings", []))
         return {"extracted_rules": extracted, "warnings": all_warnings}
 
     chunks = processor.split_by_headings(doc_structure, raw_text)
+    settings = get_settings()
+    max_chunks = max(1, settings.policy_compiler_max_llm_chunks)
+    original_chunk_count = len(chunks)
+    if original_chunk_count > max_chunks:
+        chunks = chunks[:max_chunks]
+        all_warnings.append(
+            f"WARNING: 대형 문서 LLM 청크가 {original_chunk_count}개로 많아 "
+            f"처리 상한 {max_chunks}개까지만 자동 변환했습니다. 나머지는 수동 검토가 필요합니다."
+        )
     chunk_results: list[dict] = []
     for chunk in chunks:
-        result, chunk_warnings = await run_two_step_llm_parse(chunk["text"])
+        result, chunk_warnings = await run_two_step_llm_parse(
+            chunk["text"],
+            structured_context=chunk["text"],
+        )
         chunk_results.append(result)
         all_warnings.extend(chunk_warnings)
 
     merged = processor.merge_results(chunk_results)
+    if _needs_draft_fallback(merged):
+        merged = _build_draft_rules_from_regulation(regulation)
+        all_warnings.extend(merged.get("warnings", []))
     all_warnings.append(
         f"INFO: 대형 문서 청킹 처리 완료 ({len(chunks)}개 섹션 → 병합)"
     )
@@ -117,10 +235,12 @@ async def llm_parser_agent_node(state: DocParserState) -> dict:
 def yaml_serializer_node(state: DocParserState) -> dict:
     """
     extracted_rules → 기존 Policy Pydantic 스키마(schemas/policy.py) 호환 YAML.
-    policy_id = "policy-{uuid8}"
+    policy_id comes from the upload form and is validated by the router.
     """
     ext = state.get("extracted_rules", {})
-    policy_id = f"policy-{str(uuid.uuid4())[:8]}"
+    policy_id = state.get("policy_id")
+    if not policy_id:
+        raise ValueError("policy_id is required for policy compiler output")
 
     forbidden_words: list[str] = ext.get("forbidden_words", [])
     compliance_checks: list[dict] = ext.get("compliance_checks", [])
@@ -137,7 +257,7 @@ def yaml_serializer_node(state: DocParserState) -> dict:
         "id":             policy_id,
         "name":           state["policy_name"],
         "version":        "1.0",
-        "enabled":        True,
+        "enabled":        False,
         "type":           "hybrid",
         "severity":       "high",
         "priority":       100,
@@ -167,7 +287,7 @@ def yaml_serializer_node(state: DocParserState) -> dict:
         },
     }
 
-    yaml_content = yaml.dump(
+    yaml_content = yaml.safe_dump(
         policy_dict,
         allow_unicode=True,
         default_flow_style=False,
@@ -179,12 +299,22 @@ def yaml_serializer_node(state: DocParserState) -> dict:
 def _build_criteria(checks: list[dict]) -> str:
     if not checks:
         return ""
-    lines = ["다음 준수 항목 위반 시 FAIL:"]
+    lines = [
+        "다음 항목은 회사 규정 문서에서 추출한 응답 검증 기준입니다:",
+        "이 YAML은 회사 규정 문서에서 생성된 검토용 draft입니다.",
+        "source_article/source_text를 기준으로 담당자가 최종 검토해야 합니다.",
+    ]
     for c in checks:
         lines.append(
             f"- [{c.get('id', '')}] {c.get('description', '')} "
             f"(심각도: {c.get('severity', 'MEDIUM')})"
         )
+        if c.get("source_article"):
+            lines.append(f"  근거 조항: {c.get('source_article')}")
+        if c.get("source_text"):
+            lines.append(f"  근거 원문: {c.get('source_text')[:500]}")
+        if c.get("needs_review"):
+            lines.append("  검토 필요: true")
     return "\n".join(lines)
 
 
@@ -230,11 +360,17 @@ def schema_validator_node(state: DocParserState) -> dict:
     warnings.extend(sev_warnings)
     rules["compliance_checks"] = validated_checks
 
-    validated_actions, act_warnings = validator.validate_actions(
-        rules.get("actions", {}), raw_text
+    is_review_draft = any(
+        check.get("needs_review") for check in rules.get("compliance_checks", [])
     )
-    warnings.extend(act_warnings)
-    rules["actions"] = validated_actions
+    if is_review_draft:
+        warnings.append("INFO: 검토용 draft 정책이므로 action 자동 강화 검증을 건너뜁니다.")
+    else:
+        validated_actions, act_warnings = validator.validate_actions(
+            rules.get("actions", {}), raw_text
+        )
+        warnings.extend(act_warnings)
+        rules["actions"] = validated_actions
 
     if not rules.get("forbidden_words"):
         warnings.append(
@@ -252,20 +388,38 @@ def schema_validator_node(state: DocParserState) -> dict:
 # 노드 6: 저장 (YAML 파일 + DB INSERT)
 # ──────────────────────────────────────────────────────────────
 def storage_writer_node(state: DocParserState) -> dict:
-    """
-    1) YAML 파일 저장: {policy_dir}/{policy_id}.yaml (UTF-8)
-    2) policies INSERT (is_active=FALSE → Feature 1/2 즉시 영향 없음)
-    3) policy_conversion_logs INSERT
-    DB 실패 시 YAML은 보존, warnings에 기록.
-    """
+    """Persist YAML and DB rows, cleaning up only artifacts from this request."""
     settings = get_settings()
     policy_id = state["policy_id"]
     warnings = list(state.get("warnings", []))
 
     policy_dir = Path(settings.policy_dir)
     policy_dir.mkdir(parents=True, exist_ok=True)
-    yaml_path = str(policy_dir / f"{policy_id}.yaml")
-    Path(yaml_path).write_text(state["yaml_content"], encoding="utf-8")
+    final_path = policy_dir / f"{policy_id}.yaml"
+    yaml_path: str | None = str(final_path)
+    tmp_path: Path | None = None
+    final_created_by_request = False
+
+    if final_path.exists():
+        warnings.append(f"YAML 저장 실패: 이미 같은 policy_id 파일이 존재합니다: {final_path}")
+        return {"yaml_path": None, "warnings": warnings}
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            suffix=".tmp",
+            prefix=f".{policy_id}.",
+            dir=policy_dir,
+            delete=False,
+        ) as tmp:
+            tmp.write(state["yaml_content"])
+            tmp_path = Path(tmp.name)
+    except OSError as e:
+        warnings.append(f"YAML 임시 파일 저장 실패: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        return {"yaml_path": None, "warnings": warnings}
 
     try:
         eff_date = date.fromisoformat(state.get("effective_date", ""))
@@ -292,18 +446,67 @@ def storage_writer_node(state: DocParserState) -> dict:
             effective_date=eff_date,
             is_active=False,
         ))
+        # PolicyConversionLogModel.policy_id has an FK to policies.id. Flush the
+        # parent first because these models do not declare ORM relationships that
+        # would let SQLAlchemy infer insert ordering automatically.
+        session.flush()
         session.add(PolicyConversionLogModel(
             id=str(uuid.uuid4()),
             policy_id=policy_id,
+            requested_policy_id=policy_id,
             original_filename=Path(state["file_path"]).name,
             parsed_rules_count=parsed_count,
             conversion_status=status,
             warnings=warnings,
         ))
+        session.add(PolicyVersionModel(
+            id=str(uuid.uuid4()),
+            policy_id=policy_id,
+            version="1.0",
+            yaml_path=yaml_path,
+            yaml_snapshot=state["yaml_content"],
+            is_current=False,
+            activated_at=None,
+        ))
+        session.flush()
+        if tmp_path is None:
+            raise OSError("YAML temporary file is missing")
+        os.replace(tmp_path, final_path)
+        tmp_path = None
+        final_created_by_request = True
         session.commit()
+    except IntegrityError as e:
+        session.rollback()
+        warnings.append(f"DB 무결성 저장 실패로 YAML 산출물을 정리했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
+    except SQLAlchemyError as e:
+        session.rollback()
+        warnings.append(f"DB 저장 실패로 YAML 산출물을 정리했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
+    except OSError as e:
+        session.rollback()
+        warnings.append(f"YAML 최종 파일 저장 실패로 DB 저장을 취소했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
     except Exception as e:
         session.rollback()
-        warnings.append(f"DB 저장 실패 (YAML은 보존됨): {e}")
+        warnings.append(f"정책 저장 중 예상하지 못한 오류로 YAML 산출물을 정리했습니다: {e}")
+        if tmp_path is not None:
+            _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
+        if final_created_by_request:
+            _safe_unlink_policy_artifact(final_path, policy_dir, policy_id)
+        yaml_path = None
     finally:
         session.close()
 

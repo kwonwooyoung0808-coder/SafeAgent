@@ -1,9 +1,0 @@
-다음 문서에서 AI 정책 규칙을 분석하여 JSON만 반환하라.
-
-필수 추출 항목:
-1. forbidden_words
-2. compliance_checks
-3. actions
-4. warnings
-
-설명 문장 없이 JSON 객체만 출력하라.

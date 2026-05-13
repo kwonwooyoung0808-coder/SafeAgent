@@ -15,10 +15,10 @@ class ProxyChatRequest(BaseModel):
     policy_id 생략 시 agent 의 등록된 기본 policy_id 사용 (둘 다 없으면 422).
     """
 
-    agent_id: str
+    agent_id: str = Field(min_length=1, max_length=80)
     policy_id: str | None = None
-    query: str
-    context: str | None = None
+    query: str = Field(min_length=1, max_length=10_000)
+    context: str | None = Field(default=None, max_length=20_000)
 
 
 class ProxyChatResponse(BaseModel):

@@ -27,7 +27,10 @@
     {
       "id": "CC-001",
       "description": "준수 사항 설명",
-      "severity": "HIGH"
+      "severity": "HIGH",
+      "source_article": "제7조",
+      "source_text": "근거 원문 핵심 문장",
+      "needs_review": true
     }
   ],
   "actions": {

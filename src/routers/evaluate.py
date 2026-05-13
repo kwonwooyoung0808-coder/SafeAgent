@@ -38,7 +38,7 @@ def evaluate(request: EvaluateRequest, db: Session = Depends(get_db)) -> Evaluat
     trace_logger.log_node(request.run_id, settings.workflow_name, "input", "api")
 
     state = execute_workflow(request)
-    trace_logger.log_node(request.run_id, settings.workflow_name, "generator", "fake_llm")
+    trace_logger.log_node(request.run_id, settings.workflow_name, "generator", "provided_response")
     trace_logger.log_node(request.run_id, settings.workflow_name, "policy_evaluator", "policy")
     if state.judge_results:
         trace_logger.log_node(request.run_id, settings.workflow_name, "judge_engine", "judge")

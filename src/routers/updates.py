@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
+from src.core.dependencies import require_role
 from src.schemas.update import (
     ReleaseManifestResponse,
     UpdateHistoryResponse,
@@ -34,7 +35,7 @@ def updates_history() -> UpdateHistoryResponse:
 
 
 @router.get("/bundle")
-def updates_bundle() -> FileResponse:
+def updates_bundle(_=Depends(require_role("admin", "operator"))) -> FileResponse:
     bundle_path = get_release_bundle_path()
     return FileResponse(
         bundle_path,

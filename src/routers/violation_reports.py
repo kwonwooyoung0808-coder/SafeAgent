@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from src.core.dependencies import get_db
+from src.core.dependencies import AuthenticatedUser, get_current_user, get_db
 from src.database.models import ViolationReportModel
 
 router = APIRouter(prefix="/v1/violation-reports", tags=["violation-reports"])
@@ -49,7 +49,8 @@ class StatusUpdateRequest(BaseModel):
     admin_note: str | None = None
 
 
-def _to_item(r: ViolationReportModel) -> ViolationReportItem:
+def _to_item(r: ViolationReportModel, user: AuthenticatedUser) -> ViolationReportItem:
+    can_view_original = user.role == "admin"
     return ViolationReportItem(
         id=r.id,
         trace_id=r.trace_id,
@@ -61,9 +62,9 @@ def _to_item(r: ViolationReportModel) -> ViolationReportItem:
         primary_category=r.primary_category,
         policy_version=r.policy_version,
         summary=r.summary,
-        original_query=r.original_query,
+        original_query=r.original_query if can_view_original else None,
         masked_query=r.masked_query,
-        original_response=r.original_response,
+        original_response=r.original_response if can_view_original else None,
         masked_response=r.masked_response,
         violations=r.violations or [],
         risk_reasons=r.risk_reasons or [],
@@ -81,6 +82,7 @@ def list_reports(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> ViolationReportListResponse:
     """위반 리포트 목록. 상태/agent 필터 + 페이지네이션."""
     q = db.query(ViolationReportModel)
@@ -95,16 +97,20 @@ def list_reports(
         .limit(limit)
         .all()
     )
-    items = [_to_item(r) for r in rows]
+    items = [_to_item(r, user) for r in rows]
     return ViolationReportListResponse(items=items, total=total)
 
 
 @router.get("/{report_id}", response_model=ViolationReportItem)
-def get_report(report_id: str, db: Session = Depends(get_db)) -> ViolationReportItem:
+def get_report(
+    report_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> ViolationReportItem:
     r = db.query(ViolationReportModel).filter(ViolationReportModel.id == report_id).first()
     if not r:
         raise HTTPException(status_code=404, detail=f"report_id={report_id} 없음")
-    return _to_item(r)
+    return _to_item(r, user)
 
 
 @router.put("/{report_id}/status", response_model=ViolationReportItem)
@@ -112,6 +118,7 @@ def update_status(
     report_id: str,
     payload: StatusUpdateRequest,
     db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> ViolationReportItem:
     r = db.query(ViolationReportModel).filter(ViolationReportModel.id == report_id).first()
     if not r:
@@ -127,4 +134,4 @@ def update_status(
 
     db.commit()
     db.refresh(r)
-    return _to_item(r)
+    return _to_item(r, user)

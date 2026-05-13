@@ -15,7 +15,7 @@ PolicyResultEntry = tuple[Policy, PolicyEvaluationResult]
 class EvaluateRequest(BaseModel):
     run_id: str | None = None
     input: str
-    response: str | None = None
+    response: str = Field(min_length=1, max_length=50000)
     context: dict[str, Any] = Field(default_factory=dict)
     retrieved_context: list[str] | None = None
 
@@ -67,18 +67,6 @@ class WorkflowState(BaseModel):
     action: ActionResult | None = None
     status: str = "running"
     error_message: str | None = None
-
-# --- [추가해야 할 부분] ---
-
-class TraceNodeCreate(BaseModel):
-    """TraceLogger에서 DB에 저장하기 전 데이터를 검증하는 스키마"""
-    run_id: str
-    workflow_name: str
-    node_name: str
-    node_type: str
-    latency_ms: float = 0.0
-    status: str = "completed"
-
 
 class RunResponse(BaseModel):
     """GET /api/v1/runs/{run_id} API의 응답 규격 스키마"""

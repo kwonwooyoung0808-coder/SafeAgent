@@ -42,12 +42,6 @@ def apply_action(state: WorkflowState, action: ActionResult) -> WorkflowState:
     return state
 
 
-def fail_state(state: WorkflowState, message: str) -> WorkflowState:
-    state.status = "failed"
-    state.error_message = message
-    return state
-
-
 __all__ = [
     "WorkflowState",
     "build_initial_state",
@@ -56,5 +50,4 @@ __all__ = [
     "apply_judge_results",
     "apply_violations",
     "apply_action",
-    "fail_state",
 ]

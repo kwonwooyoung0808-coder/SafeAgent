@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.core.dependencies import get_db
+from src.core.dependencies import AuthenticatedUser, get_current_user, get_db
 from src.database.models import AuditLogModel, QueryAuditLogModel, ResponseAuditLogModel
 from src.schemas.audit import AuditLogResponse # 스키마 임포트
 
@@ -41,19 +41,24 @@ query_audit_router = APIRouter(prefix="/v1/audit", tags=["audit"])
 
 
 @query_audit_router.get("/query/{audit_id}")
-def get_query_audit(audit_id: str, db: Session = Depends(get_db)) -> dict:
+def get_query_audit(
+    audit_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
     """Feature 1 응답의 audit_id로 질의 감사 로그 단건 조회."""
     row = db.query(QueryAuditLogModel).filter(QueryAuditLogModel.id == audit_id).first()
     if not row:
         raise HTTPException(status_code=404, detail=f"audit_id={audit_id} 없음")
 
+    query = row.query if user.role == "admin" else row.masked_query
     return {
         "audit_id":     row.id,
         "trace_id":     row.trace_id,
         "agent_id":     row.agent_id,
         "policy_id":    row.policy_id,
         "policy_version": row.policy_version,
-        "query":        row.query,
+        "query":        query,
         "masked_query": row.masked_query,
         "pii_detected": row.pii_detected,
         "context":      row.context,
@@ -66,12 +71,18 @@ def get_query_audit(audit_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @query_audit_router.get("/response/{audit_id}")
-def get_response_audit(audit_id: str, db: Session = Depends(get_db)) -> dict:
+def get_response_audit(
+    audit_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(get_current_user),
+) -> dict:
     """Feature 2 응답의 audit_id로 응답 감사 로그 단건 조회."""
     row = db.query(ResponseAuditLogModel).filter(ResponseAuditLogModel.id == audit_id).first()
     if not row:
         raise HTTPException(status_code=404, detail=f"audit_id={audit_id} 없음")
 
+    query = row.query if user.role == "admin" else row.masked_query
+    response = row.response if user.role == "admin" else row.masked_response
     return {
         "audit_id":         row.id,
         "trace_id":         row.trace_id,
@@ -79,9 +90,9 @@ def get_response_audit(audit_id: str, db: Session = Depends(get_db)) -> dict:
         "agent_id":         row.agent_id,
         "policy_id":        row.policy_id,
         "policy_version":   row.policy_version,
-        "query":            row.query,
+        "query":            query,
         "masked_query":     row.masked_query,
-        "response":         row.response,
+        "response":         response,
         "masked_response":  row.masked_response,
         "pii_detected":     row.pii_detected,
         "compliance_score": row.compliance_score,
