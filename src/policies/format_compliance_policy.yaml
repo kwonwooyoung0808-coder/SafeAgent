@@ -1,36 +1,30 @@
-id: "FORMAT_001"
-name: "response_format_compliance"
-version: "2.1.0"
-# COMP_001(compliance_policy)와 required_json_keys 가 상호 배타적이라
-# 같은 응답에 대해 둘 다 활성이면 항상 한쪽이 BLOCK 됨. 운영 시점에는 둘 중 하나만 활성화 권장.
-# 기본 출시 구성에서는 COMP_001(answer/source/confidence) 사용. 본 정책은 비활성.
+id: FORMAT_001
+name: response_format_compliance
+version: '2.2'
 enabled: false
-type: "rule"
-judge_required: "never"
-severity: "high"
+type: rule
+judge_required: never
+severity: high
 priority: 80
-
-context_scope: ["query", "response"]
-
+context_scope:
+- query
+- response
 preconditions:
   requires_retrieved_context: false
-
 rules:
-  - condition: "format_validation"
-    on_rule_failure: "block_immediately"
-    parameters:
-      required_formats:
-        - "JSON"
-      required_json_keys:
-        - "summary"
-        - "evidence"
-        - "disclaimer"
-
+- condition: format_validation
+  on_rule_failure: block_immediately
+  parameters:
+    required_formats:
+    - JSON
+    required_json_keys:
+    - summary
+    - evidence
+    - disclaimer
 action:
-  type: "BLOCK"
-  fallback_response: "시스템 내부의 응답 포맷 변환(JSON) 과정에서 오류가 발생하여 안전을 위해 응답이 차단되었습니다."
-
+  type: BLOCK
+  fallback_response: 시스템 내부의 응답 포맷 변환(JSON) 과정에서 오류가 발생하여 안전을 위해 응답이 차단되었습니다.
 conflict_resolution:
   block_overrides_log: true
   use_policy_priority: true
-  fallback_message_policy: "highest_priority_block"
+  fallback_message_policy: highest_priority_block

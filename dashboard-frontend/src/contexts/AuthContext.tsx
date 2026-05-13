@@ -77,12 +77,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         password: 'changeme'
       });
 
-      const { access_token, user_id, username, policy_groups } = response.data;
+      const { access_token } = response.data;
       
+      // 토큰 저장 (이후 요청에서 사용됨)
+      localStorage.setItem('safeagent_user', JSON.stringify({ access_token }));
+
+      // 2. /v1/auth/me를 통해 실제 유저 정보 가져오기
+      const meResponse = await api.get('/v1/auth/me');
+      const { user_id, username, role, policy_groups } = meResponse.data;
+
       const authenticatedUser: User = {
-        user_id: user_id || 'demo-id',
-        username: username || (targetRole === 'ADMIN' ? 'Administrator' : 'Employee User'),
-        role: targetRole, // 프론트엔드 UI 제어용 역할
+        user_id,
+        username,
+        role: targetRole, // 프론트엔드 UI 제어용 역할 (서버 역할과 다를 수 있음)
         policy_groups: policy_groups || [],
         access_token
       };
@@ -90,7 +97,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(authenticatedUser);
       localStorage.setItem('safeagent_user', JSON.stringify(authenticatedUser));
       localStorage.setItem('safeagent_demo_role', targetRole);
-      
+
       return true;
     } catch (error) {
       console.error(`Silent login for ${targetRole} failed:`, error);
