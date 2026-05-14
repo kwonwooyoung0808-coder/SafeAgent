@@ -1,28 +1,94 @@
 # SafeAgent_Manager
 
-회사 자체 AI (Sovereign AI) 의 입출력을 정책 기반으로 검사하고 위반 시 차단/경고/안전 대체 응답을 제공하는 **AI 거버넌스 게이트웨이** 입니다.
+> 정책 기반 기업용 Sovereign AI Agent를 제어하는 **AI 거버넌스 게이트웨이**
 
-PRD 18.x 기준 자체 호스팅 (B2B) 배포를 가정하며, 데이터 주권 (사내망 외 데이터 유출 차단) 을 핵심 가치로 합니다.
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Tests](https://img.shields.io/badge/Tests-231%2F231%20passed-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
 ---
 
-## 핵심 기능
+## 목차
 
-| Feature | 설명 | 라우터 |
-|---------|------|-------|
-| **F1 Input Guard** | 사용자 질의 위험 검사 (룰 기반, P95 ≤ 3s) | `POST /v1/input-guard/check` |
+1. [소개](#1-소개)
+2. [주요 화면](#2-주요-화면)
+3. [핵심 기능](#3-핵심-기능)
+4. [기술 스택](#4-기술-스택)
+5. [아키텍처 개요](#5-아키텍처-개요)
+6. [설치 방법](#6-설치-방법)
+7. [환경변수 전체 가이드](#7-환경변수-전체-가이드)
+8. [주요 API](#8-주요-api)
+9. [프로젝트 구조](#9-프로젝트-구조)
+10. [모델 권장 (CPU 환경)](#10-모델-권장-cpu-환경)
+11. [테스트](#11-테스트)
+12. [트러블슈팅](#12-트러블슈팅)
+13. [향후 로드맵](#13-향후-로드맵)
+14. [관련 문서](#14-관련-문서)
+
+---
+
+## 1. 소개
+
+### 배경
+
+2023년 삼성전자에서 임직원이 반도체 설비 소스코드와 사내 전략 회의 녹음 파일을 ChatGPT에 입력해 기밀이 유출되는 사고가 3건 발생했었습니다. 퍼블릭 AI는 편리하지만, 기업의 핵심 지적재산권을 외부 클라우드에 영구 종속시키는 치명적 위협을 초래할 수 있습니다.
+
+이후 핵심 기술을 다루는 기업의 70% 이상이 향후 1~2년 이내 사내망에서 구동되는 자체 AI(sLLM)를 도입할 계획을 세우거나 이미 테스트(PoC)를 진행 중인 것으로 예상됩니다.
+
+### 해결책
+
+SafeAgent_Manager는 회사 전용 AI(Sovereign AI — 사내망에서 자체 호스팅하는 LLM)의 앞뒤에 위치하여 다음을 자동으로 수행합니다:
+
+- **입력 검사 (F1)** — 사용자 질의에 기밀 정보·금지 표현이 포함되면 즉시 차단
+- **응답 검사 (F2)** — AI가 생성한 답변이 사내 정책을 준수하는지 LLM Judge가 검증
+- **정책 관리 (F3)** — `.docx` / `.hwpx` 정책 문서를 YAML로 자동 변환하고 버전 관리
+- **데이터 주권 보호** — 클라우드 LLM(`api.openai.com` 등)으로의 요청을 자동 거부 (NIST SP 800-53 SC-7(5))
+
+### 설계 원칙
+
+| 원칙 | 내용 |
+|------|------|
+| **Fail-Closed** | 시스템 오류 시 모든 위험 접근 즉각 차단 (기본 차단 정책) |
+| **100% 온프레미스** | 외부 네트워크 연결 없이 로컬 환경에서만 처리 |
+| **설명 가능한 통제** | 차단 시 위반 사유(Policy Violation Report)를 투명하게 제공 |
+
+**대상 사용자:** AI 거버넌스 담당자, 보안팀, 사내 AI 운영자
+
+---
+
+## 2. 주요 화면
+
+### 보안 모니터링 대시보드
+
+실시간 보안 이벤트 현황, 감사 로그 집계, 시스템 무결성 점수를 한 화면에서 확인합니다.
+
+![보안 모니터링 대시보드](docs/images/screenshot_01.png)
+
+### AI 보안 비서 — 정책 위반 차단
+
+사용자가 사내 정책상 금지된 질의를 입력하면 `ACCESS DENIED BY POLICY` 응답과 함께 안전 대체 메시지를 반환합니다.
+
+![AI 보안 비서 정책 위반 차단](docs/images/screenshot_02.png)
+
+---
+
+## 3. 핵심 기능
+
+| Feature | 설명 | 엔드포인트 |
+|---------|------|-----------|
+| **F1 Input Guard** | 사용자 질의 위험 검사 — LLM 미사용, 결정론적 룰 기반 (P95 ≤ 3s) | `POST /v1/input-guard/check` |
 | **F2 Response Guard** | AI 응답 정책 준수 검증 (LLM Judge + Self-Consistency 옵션) | `POST /v1/response-guard/validate` |
 | **F3 Policy Compiler** | `.docx` → YAML 정책 변환 + 버전 관리 | `POST /v1/policy-compiler/compile` |
 | **Proxy Chat** | F1 → Sovereign AI → F2 자동 연결 (편의) | `POST /v1/proxy/chat` |
 
-### 추가 기능 (Phase 1-3)
+### 거버넌스 부가 기능
 
 | 기능 | 위치 |
 |------|------|
-| Safe Response Generator (PRD §8) — 차단 시 안전 대체 응답 | `services/safe_response_generator.py` |
-| Policy Violation Reporter (PRD §7) — 위반 자동 리포트 | `routers/violation_reports.py` |
-| trace_id 체인 (PRD §6) — F1/F2/audit/violation 추적 | `core/dependencies.py:get_trace_id` |
-| PII 마스킹 (PRD §6) — audit log 에 마스킹 사본 보존 | `utils/masker.py` |
+| Safe Response Generator — 차단 시 안전 대체 응답 | `services/safe_response_generator.py` |
+| Policy Violation Reporter — 위반 자동 리포트 | `routers/violation_reports.py` |
+| trace_id 체인 — F1/F2/audit/violation 전 구간 추적 | `core/dependencies.py` |
+| PII 마스킹 — audit log 에 마스킹 사본 보존 | `utils/masker.py` |
 | Policy Groups — 다대다 매핑 (부서/팀 단위) | `routers/policy_groups.py` |
 | Policy Versions — 정책 버전 관리 + 롤백 | `routers/policy_versions.py` |
 | 정책 메모리 캐시 — 핫패스 디스크 I/O 제거 | `utils/policy_cache.py` |
@@ -31,16 +97,101 @@ PRD 18.x 기준 자체 호스팅 (B2B) 배포를 가정하며, 데이터 주권 
 
 ---
 
-## 빠른 시작
+## 4. 기술 스택
+
+**Backend**  
+![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=for-the-badge&logo=pydantic&logoColor=white)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)
+
+**Orchestration**  
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)
+
+**Database**  
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+
+**LLM Runtime**  
+![Ollama](https://img.shields.io/badge/Ollama-000000?style=for-the-badge&logo=ollama&logoColor=white)
+
+**Frontend**  
+![React](https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/TailwindCSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)
+
+**API Gateway**  
+![Spring Boot](https://img.shields.io/badge/Spring_Boot-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)
+
+---
+
+## 5. 아키텍처 개요
+
+SafeAgent Manager는 4계층으로 구성됩니다. 각 계층은 독립 배포·교체가 가능하며, 전 구간이 온프레미스 안에서 완결됩니다.
+
+```
+[ Layer 1: Client & Gateway ]  Spring Boot — JWT 인증, Rate Limiting
+           │
+           ▼
+[ Layer 2: FastAPI Services ]  Input Guard / Response Guard / Policy Compiler
+           │
+           ▼
+[ Layer 3: Orchestration    ]  LangGraph — 에이전트 파이프라인, Violation Reporter
+           │
+           ▼
+[ Layer 4: Data & LLM       ]  Ollama (로컬) + PostgreSQL — 외부 네트워크 차단
+```
+
+### 요청 처리 흐름
+
+사용자 요청은 F1 → Sovereign AI → F2 순서를 거칩니다. 어느 단계에서든 위반이 감지되면 즉시 차단하고 안전 대체 응답을 반환합니다.
+
+```
+사용자 질의
+    │
+    ▼
+┌──────────────────────────────────┐
+│  F1 Input Guard                  │  결정론적 룰 기반 (LLM 미사용)
+│  POST /v1/input-guard/check      │  (기밀·금지어·PII·프롬프트 인젝션 감지)
+└────────┬─────────────┬───────────┘
+         │ PASS        │ BLOCK
+         ▼             ▼
+         │        안전 대체 응답 + Violation Report
+┌──────────────────────────────────┐
+│  Sovereign AI                    │  사내 전용 LLM (Ollama 로컬)
+│  (온프레미스 격리)                │  클라우드 LLM 자동 차단
+└────────┬─────────────────────────┘
+         │ AI 응답 생성
+         ▼
+┌──────────────────────────────────┐
+│  F2 Response Guard               │  LLM Judge 정책 검증
+│  POST /v1/response-guard/validate│  (환각·기밀·정책 위반 탐지)
+└────────┬─────────────┬───────────┘
+         │ PASS        │ BLOCK
+         ▼             ▼
+    최종 응답 반환  안전 대체 응답 + Violation Report
+```
+
+### trace_id 체인 추적
+
+모든 단계에서 `trace_id`가 자동 발급되어 F1 audit · F2 audit · violation report가 단일 요청으로 연결됩니다. 클라이언트가 `X-Trace-Id` 헤더로 직접 지정할 수도 있습니다.
+
+```cmd
+curl -H "X-Trace-Id: my-request-001" -X POST ...
+```
+
+---
+
+## 6. 설치 방법
 
 ### 1. 사전 준비
 
 - Python 3.10+
 - PostgreSQL 18 (port 5433 권장)
-- [Ollama](https://ollama.com/) + 모델 다운로드
+- [Ollama](https://ollama.com/) + 모델 다운로드 (모델 선택 기준: [10. 모델 권장](#10-모델-권장-cpu-환경))
   ```cmd
-  ollama pull qwen2.5:7b
   ollama pull llama3.2:3b
+  ollama pull qwen2.5:7b
   ```
 
 ### 2. 패키지 설치
@@ -51,30 +202,12 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. 환경변수 (`.env` 생성)
+### 3. 환경변수 설정
 
-`.env.example` 을 복사 후 수정:
+`.env.example`을 복사해 `.env`를 생성한 뒤, [7. 환경변수 전체 가이드](#7-환경변수-전체-가이드)를 참고하여 값을 수정합니다.
 
-```env
-APP_NAME=SafeAgent_Manager
-DATABASE_URL=postgresql://postgres:YOUR_PW@localhost:5433/safeagent
-POLICY_DIR=src/policies
-PROMPT_DIR=src/prompts
-WORKFLOW_NAME=governance_workflow
-
-SYSTEM_INPUT_POLICY_ID=CONTENT_001
-ENABLE_SELF_CONSISTENCY=false
-
-# Governance LLM (F2 Judge)
-GOVERNANCE_LLM_URL=http://localhost:11434
-GOVERNANCE_LLM_MODEL=qwen2.5:7b
-GOVERNANCE_LLM_TEMPERATURE=0.1
-
-# Sovereign AI (검사 대상 회사 AI — 데이터 주권 가드 적용)
-SOVEREIGN_AI_URL=http://localhost:11434
-SOVEREIGN_AI_MODEL=qwen2.5:7b
-SOVEREIGN_AI_TEMPERATURE=0.7
-SOVEREIGN_ALLOWED_HOSTS=localhost,host.docker.internal,ollama
+```cmd
+copy .env.example .env
 ```
 
 ### 4. DB 생성 + 마이그레이션
@@ -100,7 +233,31 @@ Swagger UI: http://localhost:8000/docs
 
 ---
 
-## 환경변수 전체 가이드
+## 7. 환경변수 전체 가이드
+
+`.env.example`을 복사 후 아래 표를 참고해 수정합니다:
+
+```env
+APP_NAME=SafeAgent_Manager
+DATABASE_URL=postgresql://postgres:YOUR_PW@localhost:5433/safeagent
+POLICY_DIR=src/policies
+PROMPT_DIR=src/prompts
+WORKFLOW_NAME=governance_workflow
+
+SYSTEM_INPUT_POLICY_ID=CONTENT_001
+ENABLE_SELF_CONSISTENCY=false
+
+# Governance LLM (F2 Judge + F3 Policy Compiler)
+GOVERNANCE_LLM_URL=http://localhost:11434
+GOVERNANCE_LLM_MODEL=qwen2.5:7b
+GOVERNANCE_LLM_TEMPERATURE=0.1
+
+# Sovereign AI (검사 대상 회사 AI — 데이터 주권 가드 적용)
+SOVEREIGN_AI_URL=http://localhost:11434
+SOVEREIGN_AI_MODEL=qwen2.5:7b
+SOVEREIGN_AI_TEMPERATURE=0.7
+SOVEREIGN_ALLOWED_HOSTS=localhost,host.docker.internal,ollama
+```
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
@@ -109,39 +266,27 @@ Swagger UI: http://localhost:8000/docs
 | `PROMPT_DIR` | `src/prompts` | LLM 프롬프트 폴더 |
 | `SYSTEM_INPUT_POLICY_ID` | `CONTENT_001` | F1 고정 시스템 정책 |
 | `ENABLE_SELF_CONSISTENCY` | `false` | F2 Self-Consistency Check (true 시 LLM 2회 호출) |
-| `GOVERNANCE_LLM_URL` | `localhost:11434` | F2 Judge LLM URL |
-| `GOVERNANCE_LLM_MODEL` | `qwen2.5:7b` | F2 Judge 모델 |
+| `GOVERNANCE_LLM_URL` | `localhost:11434` | F2 Judge + F3 Compiler LLM URL |
+| `GOVERNANCE_LLM_MODEL` | `qwen2.5:7b` | F2/F3 전용 모델 (고정밀 추론) |
 | `SOVEREIGN_AI_URL` | `localhost:11434` | 검사 대상 회사 AI URL ⚠️ 주권 가드 적용 |
 | `SOVEREIGN_AI_MODEL` | `qwen2.5:7b` | 회사 AI 모델 |
 | `SOVEREIGN_ALLOWED_HOSTS` | `localhost,host.docker.internal,ollama` | 허용 호스트 (콤마 구분) |
-| `SAFE_RESPONSE_LLM_*` | governance LLM 동일 | Safe Response Generator (현재 템플릿 기반, env 설정만 등록) |
+| `SAFE_RESPONSE_LLM_*` | governance LLM 동일 | Safe Response Generator (현재 템플릿 기반) |
 
 ### 데이터 주권 가드 (NIST SP 800-53 SC-7(5))
 
-`SOVEREIGN_AI_URL` 은 다음 조건을 충족해야 시작됩니다:
+`SOVEREIGN_AI_URL` 은 다음 조건을 충족해야 서버가 시작됩니다:
 
 1. `SOVEREIGN_ALLOWED_HOSTS` 에 명시 등록된 호스트, 또는
 2. RFC 1918 사내 IP 대역 (`10/8`, `172.16/12`, `192.168/16`, `127/8`)
 
-클라우드 LLM (`api.openai.com`, `api.anthropic.com` 등) 은 자동 차단. 운영자 실수 방지 + 신규 클라우드 자동 거부.
+클라우드 LLM (`api.openai.com`, `api.anthropic.com` 등)은 자동 차단됩니다. 운영자 실수 방지 및 신규 클라우드 엔드포인트 자동 거부.
 
-상세 설계: [docs/sovereignty_guard.md](docs/sovereignty_guard.md) (필요 시 작성)
-
----
-
-## 모델 권장 (CPU 환경)
-
-| 환경 | Governance LLM | Sovereign AI | 비고 |
-|------|---------------|------------|------|
-| **권장 (검증됨)** | `qwen2.5:7b` | `qwen2.5:7b` | 메모리 14GB, 안정 |
-| 한국어 품질 우선 | `qwen2.5:7b` | `qwen3:8b` | swap 발생 가능 |
-| 메모리 빡빡 (16GB) | 단일 모델 통일 권장 | 동일 | swap 진입 방지 |
-
-`qwen3` 계열의 thinking 모드는 자동 차단됨 (`/no_think` + `think:false` + 응답 후처리).
+상세 설계: [docs/sovereignty_guard.md](docs/sovereignty_guard.md)
 
 ---
 
-## 주요 API
+## 8. 주요 API
 
 전체 목록은 Swagger UI 참조. 핵심 그룹만 발췌:
 
@@ -170,17 +315,9 @@ Swagger UI: http://localhost:8000/docs
 - `GET /health/system` — DB + 엔터티 카운트
 - `GET /health/llm` — Sovereign AI / Governance LLM 도달 가능성 (추론 호출 없음)
 
-### trace_id 체인 추적
-
-모든 응답에 `trace_id` 자동 발급. 클라이언트가 `X-Trace-Id` 헤더로 직접 지정 가능. 한 사용자 요청의 F1/F2 audit + violation_report 가 동일 trace_id 로 연결됨.
-
-```cmd
-curl -H "X-Trace-Id: my-request-001" -X POST ...
-```
-
 ---
 
-## 프로젝트 구조
+## 9. 프로젝트 구조
 
 ```
 src/
@@ -197,7 +334,7 @@ src/
 ├─ policies/                     # YAML 정책 파일
 ├─ prompts/                      # LLM 프롬프트 템플릿
 ├─ routers/                      # FastAPI 라우터
-│  ├─ input_guard.py             # F1 (PRD 명명규칙)
+│  ├─ input_guard.py             # F1
 │  ├─ response_guard.py          # F2
 │  ├─ policy_compiler.py         # F3
 │  ├─ proxy.py                   # F1+F2 편의
@@ -212,12 +349,12 @@ src/
 ├─ services/
 │  ├─ ollama_client.py           # Governance LLM (thinking 차단)
 │  ├─ sovereign_ai_client.py     # 검사 대상 AI (주권 가드)
-│  ├─ safe_response_generator.py # 차단 시 안전 응답 (PRD §8)
+│  ├─ safe_response_generator.py # 차단 시 안전 응답
 │  └─ violation_reporter.py      # 위반 자동 기록
 ├─ utils/
 │  ├─ masker.py                  # PII 마스킹
 │  ├─ policy_cache.py            # 정책 메모리 캐시
-│  ├─ policy_combiner.py         # 다중 정책 결합 (Stage A)
+│  ├─ policy_combiner.py         # 다중 정책 결합
 │  └─ agent_policies.py          # F2 정책 ID 해석 (그룹 멤버 포함)
 └─ workflows/
    ├─ input_guard_workflow.py    # LangGraph F1 (룰 only)
@@ -226,19 +363,51 @@ src/
 migrations/                       # DB 마이그레이션 SQL
 scripts/run_migrations.py         # 마이그레이션 헬퍼
 tests/
-├─ unit/                          # 단위 테스트
-└─ integration/                   # 통합 테스트
+├─ unit/                          # 단위 테스트 (77개)
+└─ integration/                   # 통합 테스트 (154개)
 ```
 
 ---
 
-## 테스트
+## 10. 모델 권장 (CPU 환경)
+
+각 기능별로 역할에 최적화된 모델을 분리해서 사용합니다:
+
+| 역할 | 권장 모델 | 특징 |
+|------|-----------|------|
+| **F1 Input Guard** | — (LLM 미사용) | 결정론적 룰 기반, P95 ≤ 3s |
+| **Sovereign AI** (회사 AI) | `qwen2.5:7b` | 안정적 한국어 추론, 메모리 7GB |
+| **F2 Response Guard + F3 Policy Compiler** | `qwen2.5:7b` | 고정밀 추론, 내규 문서 이해 |
+
+### 환경별 조합 권장
+
+| 환경 | Governance LLM (F2/F3) | Sovereign AI | 비고 |
+|------|------------------------|--------------|------|
+| **권장 (검증됨)** | `qwen2.5:7b` | `qwen2.5:7b` | 총 메모리 14GB, 안정 |
+| 한국어 품질 우선 | `qwen2.5:7b` | `qwen3:8b` | swap 발생 가능 |
+| 메모리 빡빡 (16GB) | 단일 모델 통일 권장 | 동일 | swap 진입 방지 |
+
+`qwen3` 계열의 thinking 모드는 자동 차단됨 (`/no_think` + `think:false` + 응답 후처리).
+
+---
+
+## 11. 테스트
 
 ```cmd
 .venv\Scripts\python.exe -m pytest tests/ -v
 ```
 
-현재 **176/176 통과**. 통합 테스트는 PostgreSQL `safeagent_test` DB 를 자동 사용 (운영 DB 와 격리).
+현재 **231/231 통과** (Unit 77개, Integration 154개). 통합 테스트는 PostgreSQL `safeagent_test` DB를 자동 사용 (운영 DB와 격리).
+
+### 보안 표준 검증 항목
+
+| 표준 | 검증 내용 | 상태 |
+|------|-----------|------|
+| NIST SP 800-53 SC-7(5) | 데이터 주권 URL 검증 16개 | PASS |
+| CVE-2022-29217 | JWT 알고리즘 혼동 공격 차단 | PASS |
+| OWASP API2:2023 | 사용자 enumeration 방지 | PASS |
+| ISMS-P 2.5/2.11 | 감사 로그 마커 검증 | PASS |
+| OAuth 2.0 BCP | Refresh 토큰 최소 권한 원칙 | PASS |
 
 테스트 DB 1회 준비:
 ```sql
@@ -247,29 +416,57 @@ CREATE DATABASE safeagent_test;
 
 ---
 
-## 트러블슈팅
+## 12. 트러블슈팅
 
 ### Sovereign AI 호출 실패: ReadTimeout
-- 모델이 너무 커서 CPU 추론 시 timeout. 더 작은 모델 (qwen2.5:7b → llama3.2:3b) 로 교체 또는 timeout 상향.
+모델이 너무 커서 CPU 추론 시 timeout. 더 작은 모델 또는 timeout 상향.
 
 ### F2 Judge 응답 파싱 실패
-- 작은 모델 (3B) 은 JSON 형식 못 지킴. `qwen2.5:7b` 이상 권장.
+작은 모델 (3B) 은 JSON 형식 못 지킴. `qwen2.5:7b` 이상 권장.
 
 ### qwen3 모델 timeout
-- thinking 모드가 토큰 폭증. 자동 차단 코드 포함되어 있으나 latency 영향 잔존. CPU 환경은 `qwen2.5:7b` 권장.
+thinking 모드가 토큰 폭증. 자동 차단 코드 포함되어 있으나 latency 영향 잔존. CPU 환경은 `qwen2.5:7b` 권장.
 
 ### `agent-test-001` 등록 안 됨 오류
-- DB 마이그레이션 후 또는 fresh DB. `POST /api/agents` 로 재등록:
-  ```
-  POST /api/agents { "id": "agent-test-001", "name": "Test", "policy_id": "CONTENT_001", "status": "ACTIVE" }
-  ```
+DB 마이그레이션 후 또는 fresh DB. `POST /api/agents` 로 재등록:
+```
+POST /api/agents { "id": "agent-test-001", "name": "Test", "policy_id": "CONTENT_001", "status": "ACTIVE" }
+```
 
 ### `Sovereign AI URL 거부` 시작 실패
-- 데이터 주권 가드. `.env` 의 `SOVEREIGN_AI_URL` 이 허용 호스트인지 확인. 사내 도메인은 `SOVEREIGN_ALLOWED_HOSTS` 추가.
+데이터 주권 가드. `.env` 의 `SOVEREIGN_AI_URL` 이 허용 호스트인지 확인. 사내 도메인은 `SOVEREIGN_ALLOWED_HOSTS` 추가.
+
+### Docker 이미지 Pull 실패 (ghcr.io denied)
+레지스트리 인증 없이 `docker compose pull` 실행 시 발생. 오프라인 번들 방식으로 설치:
+```cmd
+:: ZIP 번들 내 tar 파일을 로컬에 로드
+docker load -i safeagent-api.tar
+docker load -i safeagent-portal.tar
+docker compose up -d
+```
+
+### Swagger는 정상인데 프론트 기능 미동작
+서버 장애가 아닌 API 계약 불일치 문제. `/docs`, `/openapi.json`, `/health` 응답이 정상이면 서버는 정상. 프론트가 기대하는 request/response 스키마와 실제 백엔드 응답을 Swagger 기준으로 재검토.
+
+### LangGraph 경고가 API 오류처럼 보이는 경우
+`langgraph import` 시 내부 의존성 warning이 출력되지만 서버 실행 자체는 정상. `/health` 응답으로 실제 장애 여부를 구분.
 
 ---
 
-## 관련 문서
+## 13. 향후 로드맵
+
+| 단계 | 항목 | 내용 |
+|------|------|------|
+| **단기** | 관리자 UI 고도화 | 사내 인증(사원증) 연동, 역할별 권한 분리, 세션 가시화 |
+| **단기** | `.hwpx` 정책 지원 | 한국 기업 환경에 최적화된 문서 파이프라인 |
+| **중기** | 멀티테넌트 아키텍처 | 기업별 데이터 격리, 부서 스코프 정책 자동 매핑 |
+| **중기** | SSO 연동 | LDAP / AD / OIDC 기반 인증 위임 |
+| **장기** | 운영 안정화 | Docker 이미지 서명(cosign), Redis 분산 캐싱, Kubernetes 지원 |
+| **장기** | Forensic 감사 API | 특정 시점 정책 상태 재현 및 판정 결과 역추적 |
+
+---
+
+## 14. 관련 문서
 
 - [migrations/README.md](migrations/README.md) — DB 마이그레이션 절차
 - [.env.example](.env.example) — 환경변수 전체 예시
