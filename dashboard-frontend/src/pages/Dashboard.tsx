@@ -49,33 +49,95 @@ const DashboardPage = () => {
         let distribution = { PASS: 0, WARN: 0, BLOCK: 0 };
 
         try {
-          const aRes = await api.get('/api/v1/audit-logs?limit=50'); // 분석을 위해 더 많이 가져옴
-          const logs = aRes.data || [];
+          // 1단계: 모든 에이전트 목록 조회
+          const agentsRes = await api.get('/api/agents');
+          const agents = agentsRes.data || [];
+
+          // 2단계: 각 에이전트의 감사 로그 병렬 조회
+          const auditPromises = agents.map((agent: any) => 
+            api.get(`/api/agents/${agent.id}/audit`).catch(err => {
+              console.warn(`Failed to fetch audits for agent ${agent.id}`, err);
+              return { data: { query_audits: [], response_audits: [] } };
+            })
+          );
           
-          logs.forEach((item: any) => {
-            if (item.event_type === 'BLOCKED') distribution.BLOCK++;
-            else if (item.event_type === 'WARNING') distribution.WARN++;
-            else distribution.PASS++;
+          const auditResults = await Promise.all(auditPromises);
+
+          // 3단계: 모든 에이전트의 질의/응답 로그 통합 및 포맷팅
+          const allLogs: any[] = [];
+          
+          auditResults.forEach((res: any, index: number) => {
+            const agent = agents[index];
+            const data = res.data;
+
+            // 질의 로그 매핑
+            data.query_audits?.forEach((q: any) => {
+              allLogs.push({
+                id: q.audit_id,
+                agent: agent.name,
+                user: 'Admin', 
+                created_at: q.created_at,
+                status: q.status === 'Blocked' ? 'Blocked' : q.status === 'Warned' ? 'Warning' : 'Passed',
+                type: 'QUERY',
+                reason: (q.risk_reasons && q.risk_reasons.length > 0) ? q.risk_reasons[0] : '보안 필터링 검사 완료'
+              });
+            });
+
+            // 응답 로그 매핑
+            data.response_audits?.forEach((r: any) => {
+              allLogs.push({
+                id: r.audit_id,
+                agent: agent.name,
+                user: 'Admin',
+                created_at: r.created_at,
+                status: r.status === 'Blocked' ? 'Blocked' : r.status === 'Warned' ? 'Warning' : 'Passed',
+                type: 'RESPONSE',
+                reason: (r.violations && r.violations.length > 0) ? (r.violations[0].reason || r.violations[0].type) : '보안 필터링 검사 완료'
+              });
+            });
           });
 
-          recentLogs = logs.slice(0, 7).map((item: any) => ({
-            id: item.run_id || item.id,
-            time: new Date(item.created_at).toLocaleTimeString('ko-KR'),
-            type: item.event_type || 'SYSTEM',
-            user: item.context?.username || 'SYSTEM',
-            desc: item.reason || '보안 필터링 검사 완료',
-            status: item.event_type === 'BLOCKED' ? '차단됨' : item.event_type === 'WARNING' ? '경고' : '안전'
-          }));
-        } catch (e) {
-          console.warn("Audit logs API fail");
-        }
+          // 4단계: 최신순 정렬
+          allLogs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+          
+          // 5단계: 분석 및 최근 7개 슬라이싱 (최대 50개 기준 분석)
+          const timeSeriesData: Record<string, any> = {};
+          
+          allLogs.slice(0, 50).reverse().forEach((item: any) => {
+            const date = new Date(item.created_at);
+            const timeKey = `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:00`;
 
-        // 차트 데이터 업데이트 (가상 데이터 제거, 실제 분포 사용)
-        setChartData([
-          { name: '안전', value: distribution.PASS, color: '#002045' },
-          { name: '경고', value: distribution.WARN, color: '#f59e0b' },
-          { name: '차단', value: distribution.BLOCK, color: '#ef4444' },
-        ].filter(d => d.value > 0)); // 데이터가 있는 것만 표시
+            if (!timeSeriesData[timeKey]) {
+              timeSeriesData[timeKey] = { time: timeKey, 안전: 0, 경고: 0, 차단: 0 };
+            }
+
+            if (item.status === 'Blocked') {
+               timeSeriesData[timeKey].차단++;
+               distribution.BLOCK++;
+            }
+            else if (item.status === 'Warning') {
+               timeSeriesData[timeKey].경고++;
+               distribution.WARN++;
+            }
+            else {
+               timeSeriesData[timeKey].안전++;
+               distribution.PASS++;
+            }
+          });
+
+          recentLogs = allLogs.slice(0, 7).map((item: any) => ({
+            id: item.id,
+            time: new Date(item.created_at).toLocaleTimeString('ko-KR'),
+            type: item.type,
+            user: item.user,
+            desc: item.reason,
+            status: item.status === 'Blocked' ? '차단됨' : item.status === 'Warning' ? '경고' : '안전'
+          }));
+
+          setChartData(Object.values(timeSeriesData));
+        } catch (e) {
+          console.error("Audit logs API fail", e);
+        }
 
         // 최종 통계 업데이트
         const counts = systemStats?.counts || {};
@@ -166,41 +228,23 @@ const DashboardPage = () => {
             <h3 className="text-on-surface text-sm font-black uppercase tracking-widest opacity-40">Security Event Distribution</h3>
             <span className="text-[10px] font-bold text-on-surface-variant bg-surface-container px-3 py-1 rounded-full">실제 분석 데이터</span>
           </div>
-          <div className="flex-1 w-full flex flex-col md:flex-row items-center gap-8">
-            <div className="w-full md:w-1/2 h-64">
+          <div className="flex-1 w-full flex flex-col items-center justify-center pt-4">
+            <div className="w-full h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={chartData}
-                    innerRadius={70}
-                    outerRadius={100}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
+                <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b', fontWeight: 600 }} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} />
                   <Tooltip 
+                    cursor={{ fill: '#f8fafc' }}
                     contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}
                   />
-                </PieChart>
+                  <Legend wrapperStyle={{ fontSize: '10px', fontWeight: 700, paddingTop: '10px' }} />
+                  <Bar dataKey="안전" stackId="a" fill="#002045" maxBarSize={40} />
+                  <Bar dataKey="경고" stackId="a" fill="#f59e0b" maxBarSize={40} />
+                  <Bar dataKey="차단" stackId="a" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                </BarChart>
               </ResponsiveContainer>
-            </div>
-            <div className="w-full md:w-1/2 space-y-4">
-                {chartData.length > 0 ? chartData.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between p-4 bg-surface-container-low rounded-2xl border border-outline-variant/10">
-                    <div className="flex items-center gap-3">
-                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.color }}></div>
-                      <span className="text-xs font-bold text-on-surface">{item.name}</span>
-                    </div>
-                    <span className="text-sm font-black text-primary">{item.value}건</span>
-                  </div>
-                )) : (
-                  <div className="h-full flex items-center justify-center text-sm text-on-surface-variant italic opacity-40">
-                    분석 데이터 없음
-                  </div>
-                )}
             </div>
           </div>
         </div>
