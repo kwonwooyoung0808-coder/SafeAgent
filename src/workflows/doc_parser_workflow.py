@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import re
 import tempfile
+import time
 import uuid
 from datetime import date
 from functools import lru_cache
@@ -18,16 +22,18 @@ from src.engines.doc_parser_engine import run_two_step_llm_parse
 from src.engines.docx_chunk_processor import DocxChunkProcessor
 from src.engines.docx_engine import DocxEngine
 from src.engines.grounding_validator import GroundingValidator
-from src.engines.korean_regulation_parser import regulation_to_llm_context
+from src.engines.korean_regulation_parser import (
+    extract_forbidden_terms_from_articles,
+    regulation_to_llm_context,
+)
 from src.schemas.doc_parser import DocParserState
 from src.schemas.policy import Policy
+from src.services.ollama_client import OllamaClient
 
 
 # ──────────────────────────────────────────────────────────────
 # 액션 매핑: PRD 5.3.3 (BLOCK | LOG | FLAGGED) → Policy 스키마 (BLOCK | LOG)
 # ──────────────────────────────────────────────────────────────
-# 기존 PolicyAction.type Literal은 "BLOCK" | "LOG"만 허용하므로
-# LLM이 "FLAGGED"를 출력해도 Pydantic 검증 통과를 위해 LOG로 매핑.
 def _map_action_type(action_value: str | None) -> str:
     if action_value == "BLOCK":
         return "BLOCK"
@@ -101,8 +107,13 @@ def _build_draft_rules_from_regulation(regulation: dict) -> dict:
         if len(checks) >= 80:
             break
 
+    # Phase 1-A: 규칙 기반 금지어 후보 추출 (LLM 없이)
+    forbidden_candidates = extract_forbidden_terms_from_articles(
+        regulation.get("articles", [])
+    )
+
     return {
-        "forbidden_words": [],
+        "forbidden_words": forbidden_candidates,
         "compliance_checks": checks,
         "actions": {
             "on_forbidden_word": "LOG",
@@ -111,35 +122,82 @@ def _build_draft_rules_from_regulation(regulation: dict) -> dict:
         "warnings": [
             "LLM 추출 결과가 비어 있거나 부족하여 한국식 조문 파서 기반 검토용 draft를 생성했습니다.",
             "severity/action은 문서에 명시되지 않은 경우 MEDIUM/LOG로 보수 적용했습니다.",
+            f"규칙 기반 금지어 후보 {len(forbidden_candidates)}개 추출됨 — 수동 검토 필요.",
         ],
     }
+
+
+# ── Phase 1-B: 금지어 전용 경량 LLM 호출 ─────────────────────────────────
+async def _extract_forbidden_words_llm(
+    document_text: str,
+    client: OllamaClient | None = None,
+) -> tuple[list[str], list[str]]:
+    """
+    금지어 전용 단일 LLM 프롬프트 호출.
+    한국식 조문 문서에서 2단계 full parse 없이 금지어만 빠르게 추출한다.
+    """
+    if client is None:
+        client = OllamaClient()
+
+    settings = get_settings()
+    prompt_path = Path(settings.prompt_dir) / "doc_parser_forbidden_words.txt"
+    warnings: list[str] = []
+
+    if not prompt_path.exists():
+        warnings.append("금지어 전용 프롬프트 파일 없음 — 규칙 기반 결과만 사용합니다.")
+        return [], warnings
+
+    prompt_tpl = prompt_path.read_text(encoding="utf-8")
+    # 앞 3000자만 사용 (경량 호출)
+    snippet = document_text[:3000]
+
+    try:
+        raw = await client.chat(
+            system_prompt="",
+            user_message=prompt_tpl.replace("{document_text}", snippet),
+            temperature=0.0,
+        )
+        # JSON 배열 파싱
+        m = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if m:
+            words = json.loads(m.group(0))
+            if isinstance(words, list):
+                return [str(w).strip() for w in words if str(w).strip()], warnings
+        warnings.append("금지어 전용 LLM 호출: JSON 배열 파싱 실패 — 규칙 기반 결과만 사용합니다.")
+    except Exception as e:
+        warnings.append(f"금지어 전용 LLM 호출 실패: {e} — 규칙 기반 결과만 사용합니다.")
+
+    return [], warnings
 
 
 # ──────────────────────────────────────────────────────────────
 # 노드 1: DOCX 파싱 + 보안 이스케이프
 # ──────────────────────────────────────────────────────────────
 def docx_extractor_node(state: DocParserState) -> dict:
-    """
-    DocxEngine으로 문서 파싱.
-    - 숨겨진 텍스트(흰색 폰트, vanish) 필터링
-    - TextSanitizer로 인젝션 패턴 이스케이프
-    실패 → error_message → conditional edge → END (FAILED)
-    """
+    t0 = time.perf_counter()
     try:
         engine = DocxEngine()
         result = engine.parse(state["file_path"])
+        elapsed = time.perf_counter() - t0
+        timings = dict(state.get("node_timings") or {})
+        timings["docx_extractor"] = round(elapsed, 3)
         return {
             "raw_text":           result.raw_text,
             "raw_tables":         result.raw_tables,
             "doc_structure":      result.doc_structure,
             "warnings":           result.warnings,
             "injection_detected": result.injection_detected,
+            "node_timings":       timings,
         }
     except Exception as e:
+        elapsed = time.perf_counter() - t0
+        timings = dict(state.get("node_timings") or {})
+        timings["docx_extractor"] = round(elapsed, 3)
         return {
             "error_message":     str(e),
             "validation_passed": False,
             "warnings":          [f"docx 파싱 실패: {e}"],
+            "node_timings":      timings,
         }
 
 
@@ -147,8 +205,10 @@ def docx_extractor_node(state: DocParserState) -> dict:
 # 노드 2: 인젝션 게이트
 # ──────────────────────────────────────────────────────────────
 def injection_gate_node(state: DocParserState) -> dict:
-    """인젝션 탐지 시 즉시 FAILED. 정상 시 빈 dict 반환."""
+    t0 = time.perf_counter()
+    timings = dict(state.get("node_timings") or {})
     if state.get("injection_detected"):
+        timings["injection_gate"] = round(time.perf_counter() - t0, 3)
         return {
             "validation_passed": False,
             "error_message": "SECURITY: 프롬프트 인젝션 탐지 → 처리 중단.",
@@ -156,21 +216,32 @@ def injection_gate_node(state: DocParserState) -> dict:
                 "SECURITY ALERT: 문서 내 인젝션 패턴 발견. "
                 "보안팀에 보고 후 재업로드하세요."
             ],
+            "node_timings": timings,
         }
-    return {}
+    timings["injection_gate"] = round(time.perf_counter() - t0, 3)
+    return {"node_timings": timings}
+
+
+# 금지어 전용 LLM 호출 임계값 — 규칙 기반 결과가 이 수치 미만일 때만 LLM 보강
+_FORBIDDEN_LLM_THRESHOLD = 3
 
 
 # ──────────────────────────────────────────────────────────────
-# 노드 3: LLM 파싱 (2단계 분리, 청킹 지원)
+# 노드 3: LLM 파싱 (Phase 1-B 금지어 전용 호출 + Phase 3-A 청크 병렬화)
 # ──────────────────────────────────────────────────────────────
 async def llm_parser_agent_node(state: DocParserState) -> dict:
-    """
-    소형 문서(≤3000자): 2단계 LLM 파싱 단일 호출.
-    대형 문서(>3000자): 섹션 단위 청킹 → 각 청크 2단계 파싱 → 병합.
-    LLM 실패 → warnings 추가, 빈 규칙으로 계속 (PARTIAL 허용).
-    """
+    t0 = time.perf_counter()
+    timings = dict(state.get("node_timings") or {})
+    llm_call_count = int(state.get("llm_call_count", 0))
+    chunk_count = int(state.get("chunk_count", 0))
+
     if state.get("error_message"):
-        return {}
+        timings["llm_parser_agent"] = round(time.perf_counter() - t0, 3)
+        return {
+            "node_timings":   timings,
+            "llm_call_count": llm_call_count,
+            "chunk_count":    chunk_count,
+        }
 
     raw_text = state.get("raw_text", "")
     doc_structure = state.get("doc_structure", {})
@@ -181,25 +252,62 @@ async def llm_parser_agent_node(state: DocParserState) -> dict:
     article_count = regulation.get("stats", {}).get("article_count", 0)
 
     if article_count:
+        # 구조화 draft 먼저 생성 (규칙 기반 금지어 포함)
         extracted = _build_draft_rules_from_regulation(regulation)
         all_warnings.extend(extracted.get("warnings", []))
-        all_warnings.append(
-            f"INFO: 한국식 조문 {article_count}개를 구조화 draft로 변환했습니다. "
-            "장시간 LLM 청킹은 건너뜁니다."
-        )
-        return {"extracted_rules": extracted, "warnings": all_warnings}
+        rule_based = extracted.get("forbidden_words", [])
+
+        # Fix 7: 규칙 기반 결과가 임계값 미만일 때만 LLM 보강 호출
+        if len(rule_based) < _FORBIDDEN_LLM_THRESHOLD:
+            llm_fw, llm_fw_warnings = await _extract_forbidden_words_llm(raw_text)
+            llm_call_count += 1
+            all_warnings.extend(llm_fw_warnings)
+            if llm_fw:
+                merged_fw = list(dict.fromkeys(llm_fw + rule_based))
+                extracted["forbidden_words"] = merged_fw
+                all_warnings.append(
+                    f"INFO: 규칙 기반 {len(rule_based)}개 < 임계값 → 금지어 LLM 호출. "
+                    f"LLM {len(llm_fw)}개 + 규칙 {len(rule_based)}개 → 병합 {len(merged_fw)}개."
+                )
+            else:
+                all_warnings.append(
+                    f"INFO: 규칙 기반 {len(rule_based)}개 + LLM 보강 0개."
+                )
+        else:
+            all_warnings.append(
+                f"INFO: 규칙 기반 금지어 {len(rule_based)}개 ≥ 임계값 → LLM 호출 생략 "
+                f"(대기 시간 절감)."
+            )
+
+        timings["llm_parser_agent"] = round(time.perf_counter() - t0, 3)
+        return {
+            "extracted_rules": extracted,
+            "warnings":        all_warnings,
+            "node_timings":    timings,
+            "llm_call_count":  llm_call_count,
+            "chunk_count":     chunk_count,
+        }
 
     if len(raw_text) <= DocxChunkProcessor.MAX_CHARS_PER_CHUNK:
         extracted, parse_warnings = await run_two_step_llm_parse(
             raw_text,
             structured_context=structured_context,
         )
+        llm_call_count += 2  # Step 1 + Step 2
         all_warnings.extend(parse_warnings)
         if _needs_draft_fallback(extracted):
             extracted = _build_draft_rules_from_regulation(regulation)
             all_warnings.extend(extracted.get("warnings", []))
-        return {"extracted_rules": extracted, "warnings": all_warnings}
+        timings["llm_parser_agent"] = round(time.perf_counter() - t0, 3)
+        return {
+            "extracted_rules": extracted,
+            "warnings":        all_warnings,
+            "node_timings":    timings,
+            "llm_call_count":  llm_call_count,
+            "chunk_count":     chunk_count,
+        }
 
+    # Phase 3-A: 대형 문서 — 청크 병렬 처리
     chunks = processor.split_by_headings(doc_structure, raw_text)
     settings = get_settings()
     max_chunks = max(1, settings.policy_compiler_max_llm_chunks)
@@ -210,33 +318,53 @@ async def llm_parser_agent_node(state: DocParserState) -> dict:
             f"WARNING: 대형 문서 LLM 청크가 {original_chunk_count}개로 많아 "
             f"처리 상한 {max_chunks}개까지만 자동 변환했습니다. 나머지는 수동 검토가 필요합니다."
         )
+
+    chunk_count = len(chunks)
+
+    # asyncio.gather로 청크 병렬 파싱
+    parse_tasks = [
+        run_two_step_llm_parse(chunk["text"], structured_context=chunk["text"])
+        for chunk in chunks
+    ]
+    chunk_outputs = await asyncio.gather(*parse_tasks, return_exceptions=True)
+    # 각 청크는 Step 1 + Step 2 = 2회 호출 (실패 청크는 0~2회지만 보수적으로 카운트)
+    llm_call_count += chunk_count * 2
+
     chunk_results: list[dict] = []
-    for chunk in chunks:
-        result, chunk_warnings = await run_two_step_llm_parse(
-            chunk["text"],
-            structured_context=chunk["text"],
-        )
-        chunk_results.append(result)
-        all_warnings.extend(chunk_warnings)
+    for i, output in enumerate(chunk_outputs):
+        if isinstance(output, Exception):
+            all_warnings.append(f"청크 {i + 1} 파싱 오류: {output}")
+            chunk_results.append({})
+        else:
+            result, chunk_warnings = output
+            chunk_results.append(result)
+            all_warnings.extend(chunk_warnings)
 
     merged = processor.merge_results(chunk_results)
     if _needs_draft_fallback(merged):
         merged = _build_draft_rules_from_regulation(regulation)
         all_warnings.extend(merged.get("warnings", []))
     all_warnings.append(
-        f"INFO: 대형 문서 청킹 처리 완료 ({len(chunks)}개 섹션 → 병합)"
+        f"INFO: 대형 문서 청킹 병렬 처리 완료 ({chunk_count}개 섹션 → 병합)"
     )
-    return {"extracted_rules": merged, "warnings": all_warnings}
+
+    timings["llm_parser_agent"] = round(time.perf_counter() - t0, 3)
+    return {
+        "extracted_rules": merged,
+        "warnings":        all_warnings,
+        "node_timings":    timings,
+        "llm_call_count":  llm_call_count,
+        "chunk_count":     chunk_count,
+    }
 
 
 # ──────────────────────────────────────────────────────────────
 # 노드 4: YAML 직렬화 (기존 Policy 스키마 호환)
 # ──────────────────────────────────────────────────────────────
 def yaml_serializer_node(state: DocParserState) -> dict:
-    """
-    extracted_rules → 기존 Policy Pydantic 스키마(schemas/policy.py) 호환 YAML.
-    policy_id comes from the upload form and is validated by the router.
-    """
+    t0 = time.perf_counter()
+    timings = dict(state.get("node_timings") or {})
+
     ext = state.get("extracted_rules", {})
     policy_id = state.get("policy_id")
     if not policy_id:
@@ -249,7 +377,6 @@ def yaml_serializer_node(state: DocParserState) -> dict:
     on_fw = actions.get("on_forbidden_word", "BLOCK")
     rule_failure = "block_immediately" if on_fw == "BLOCK" else "judge_fallback"
 
-    # PRD 5.3.3 → Policy 스키마 매핑 (FLAGGED는 LOG로 매핑)
     on_compliance_fail_raw = actions.get("on_compliance_fail")
     action_type = _map_action_type(on_compliance_fail_raw or on_fw)
 
@@ -293,7 +420,12 @@ def yaml_serializer_node(state: DocParserState) -> dict:
         default_flow_style=False,
         sort_keys=False,
     )
-    return {"yaml_content": yaml_content, "policy_id": policy_id}
+    timings["yaml_serializer"] = round(time.perf_counter() - t0, 3)
+    return {
+        "yaml_content": yaml_content,
+        "policy_id":    policy_id,
+        "node_timings": timings,
+    }
 
 
 def _build_criteria(checks: list[dict]) -> str:
@@ -322,15 +454,10 @@ def _build_criteria(checks: list[dict]) -> str:
 # 노드 5: 스키마 + 그라운딩 검증
 # ──────────────────────────────────────────────────────────────
 def schema_validator_node(state: DocParserState) -> dict:
-    """
-    1단계 — Pydantic 구조 검증 (Policy 스키마 호환성)
-    2단계 — GroundingValidator 내용 정확성 검증
-      - forbidden_words 환각 탐지 및 제거
-      - severity 오분류 탐지 및 MEDIUM 하향
-      - actions 오추출 탐지 및 BLOCK 보수적 처리
-    완전 실패(Pydantic 오류) → validation_passed=False → END
-    부분 성공(warnings 존재) → validation_passed=True → storage_writer
-    """
+    t0 = time.perf_counter()
+    timings = dict(state.get("node_timings") or {})
+    hallucination_count = int(state.get("hallucination_removals_count", 0))
+
     warnings = list(state.get("warnings", []))
     rules = dict(state.get("extracted_rules", {}))
     raw_text = state.get("raw_text", "")
@@ -340,9 +467,12 @@ def schema_validator_node(state: DocParserState) -> dict:
         Policy(**policy_dict)
         validation_passed = True
     except Exception as e:
+        timings["schema_validator"] = round(time.perf_counter() - t0, 3)
         return {
-            "validation_passed": False,
-            "warnings": warnings + [f"스키마 검증 실패: {e}"],
+            "validation_passed":            False,
+            "warnings":                     warnings + [f"스키마 검증 실패: {e}"],
+            "node_timings":                 timings,
+            "hallucination_removals_count": hallucination_count,
         }
 
     validator = GroundingValidator()
@@ -353,6 +483,8 @@ def schema_validator_node(state: DocParserState) -> dict:
     if hallucinated:
         warnings.append(f"환각 의심 금지어 (원본 미존재, 제거됨): {hallucinated}")
         rules["forbidden_words"] = verified
+        # Fix 1: 환각 제거 수 카운트
+        hallucination_count += len(hallucinated)
 
     validated_checks, sev_warnings = validator.validate_severity_grounding(
         rules.get("compliance_checks", []), raw_text
@@ -377,21 +509,41 @@ def schema_validator_node(state: DocParserState) -> dict:
             "WARNING: forbidden_words가 비어 있음 → LLM 추출 누락 가능. 수동 검토 필요."
         )
 
+    timings["schema_validator"] = round(time.perf_counter() - t0, 3)
     return {
-        "extracted_rules":   rules,
-        "validation_passed": validation_passed,
-        "warnings":          warnings,
+        "extracted_rules":              rules,
+        "validation_passed":            validation_passed,
+        "warnings":                     warnings,
+        "node_timings":                 timings,
+        "hallucination_removals_count": hallucination_count,
     }
 
 
 # ──────────────────────────────────────────────────────────────
-# 노드 6: 저장 (YAML 파일 + DB INSERT)
+# 노드 6: 저장 (YAML 파일 + DB INSERT) — Phase 4-A 타이밍 로그 포함
 # ──────────────────────────────────────────────────────────────
 def storage_writer_node(state: DocParserState) -> dict:
-    """Persist YAML and DB rows, cleaning up only artifacts from this request."""
+    t0 = time.perf_counter()
     settings = get_settings()
     policy_id = state["policy_id"]
     warnings = list(state.get("warnings", []))
+    timings = dict(state.get("node_timings") or {})
+    llm_call_count = int(state.get("llm_call_count", 0))
+    chunk_count = int(state.get("chunk_count", 0))
+    hallucination_count = int(state.get("hallucination_removals_count", 0))
+
+    def _abort(extra_warning: str) -> dict:
+        """Fix 6: 조기 반환 시 timings + 메트릭을 일관되게 전달."""
+        warnings.append(extra_warning)
+        timings["storage_writer"] = round(time.perf_counter() - t0, 3)
+        return {
+            "yaml_path":                    None,
+            "warnings":                     warnings,
+            "node_timings":                 timings,
+            "llm_call_count":               llm_call_count,
+            "chunk_count":                  chunk_count,
+            "hallucination_removals_count": hallucination_count,
+        }
 
     policy_dir = Path(settings.policy_dir)
     policy_dir.mkdir(parents=True, exist_ok=True)
@@ -401,8 +553,9 @@ def storage_writer_node(state: DocParserState) -> dict:
     final_created_by_request = False
 
     if final_path.exists():
-        warnings.append(f"YAML 저장 실패: 이미 같은 policy_id 파일이 존재합니다: {final_path}")
-        return {"yaml_path": None, "warnings": warnings}
+        return _abort(
+            f"YAML 저장 실패: 이미 같은 policy_id 파일이 존재합니다: {final_path}"
+        )
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -416,10 +569,9 @@ def storage_writer_node(state: DocParserState) -> dict:
             tmp.write(state["yaml_content"])
             tmp_path = Path(tmp.name)
     except OSError as e:
-        warnings.append(f"YAML 임시 파일 저장 실패: {e}")
         if tmp_path is not None:
             _safe_unlink_policy_artifact(tmp_path, policy_dir, policy_id)
-        return {"yaml_path": None, "warnings": warnings}
+        return _abort(f"YAML 임시 파일 저장 실패: {e}")
 
     try:
         eff_date = date.fromisoformat(state.get("effective_date", ""))
@@ -428,8 +580,6 @@ def storage_writer_node(state: DocParserState) -> dict:
 
     status = "PARTIAL" if warnings else "SUCCESS"
 
-    # parsed_rules_count: forbidden_words + compliance_checks 개수
-    # (라우터의 동일 필드 계산식과 정합성 보장)
     ext_rules = state.get("extracted_rules", {})
     parsed_count = (
         len(ext_rules.get("forbidden_words", []))
@@ -446,10 +596,14 @@ def storage_writer_node(state: DocParserState) -> dict:
             effective_date=eff_date,
             is_active=False,
         ))
-        # PolicyConversionLogModel.policy_id has an FK to policies.id. Flush the
-        # parent first because these models do not declare ORM relationships that
-        # would let SQLAlchemy infer insert ordering automatically.
         session.flush()
+        # Fix 6: DB 트랜잭션 후에 storage_writer 타이밍 측정 (실제 작업 포함)
+        timings["storage_writer"] = round(time.perf_counter() - t0, 3)
+        total_latency_ms = round(sum(timings.values()) * 1000)
+        warnings.append(
+            f"TIMING: 전체 {total_latency_ms}ms — "
+            + ", ".join(f"{k}={v:.3f}s" for k, v in timings.items())
+        )
         session.add(PolicyConversionLogModel(
             id=str(uuid.uuid4()),
             policy_id=policy_id,
@@ -458,6 +612,10 @@ def storage_writer_node(state: DocParserState) -> dict:
             parsed_rules_count=parsed_count,
             conversion_status=status,
             warnings=warnings,
+            total_latency_ms=total_latency_ms,
+            llm_call_count=llm_call_count,
+            chunk_count=chunk_count,
+            hallucination_removals_count=hallucination_count,
         ))
         session.add(PolicyVersionModel(
             id=str(uuid.uuid4()),
@@ -510,7 +668,14 @@ def storage_writer_node(state: DocParserState) -> dict:
     finally:
         session.close()
 
-    return {"yaml_path": yaml_path, "warnings": warnings}
+    return {
+        "yaml_path":                    yaml_path,
+        "warnings":                     warnings,
+        "node_timings":                 timings,
+        "llm_call_count":               llm_call_count,
+        "chunk_count":                  chunk_count,
+        "hallucination_removals_count": hallucination_count,
+    }
 
 
 # ──────────────────────────────────────────────────────────────

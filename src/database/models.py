@@ -336,4 +336,9 @@ class PolicyConversionLogModel(Base):
     parsed_rules_count: Mapped[int] = mapped_column(Integer, default=0)
     conversion_status: Mapped[str] = mapped_column(String(50))
     warnings: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Phase 4-B: 성능/품질 메트릭
+    total_latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    llm_call_count: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    hallucination_removals_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

@@ -33,3 +33,11 @@ class DocParserState(TypedDict, total=False):
     validation_passed: bool
     warnings: list[str]
     error_message: str
+
+    # Phase 4-A: 노드별 실행 시간 (초 단위)
+    node_timings: dict[str, float]
+
+    # Phase 4-B: 메트릭 카운터
+    llm_call_count: int
+    chunk_count: int
+    hallucination_removals_count: int

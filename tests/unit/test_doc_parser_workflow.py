@@ -5,11 +5,22 @@ from src.workflows import doc_parser_workflow
 
 
 @pytest.mark.asyncio
-async def test_korean_regulation_draft_skips_llm(monkeypatch) -> None:
+async def test_korean_regulation_draft_skips_full_two_step_parse(monkeypatch) -> None:
+    """
+    한국식 조문 감지 시 무거운 2-step LLM full parse는 건너뛴다.
+    (Fix 7: 규칙 기반 결과가 임계값 미만일 때만 금지어 전용 경량 LLM 호출.)
+    """
     async def fail_if_called(*args, **kwargs):
-        raise AssertionError("LLM parser should not be called for structured Korean regulations")
+        raise AssertionError(
+            "Full 2-step LLM parse should not be called for structured Korean regulations"
+        )
+
+    async def fake_forbidden_llm(text, client=None):
+        # 경량 금지어 호출만 허용 — 빈 결과 반환해 LLM 미작동 환경 시뮬레이션
+        return [], []
 
     monkeypatch.setattr(doc_parser_workflow, "run_two_step_llm_parse", fail_if_called)
+    monkeypatch.setattr(doc_parser_workflow, "_extract_forbidden_words_llm", fake_forbidden_llm)
 
     result = await doc_parser_workflow.llm_parser_agent_node({
         "raw_text": "제1조(목적) 회사의 비밀을 보호하여야 한다.",
@@ -31,7 +42,11 @@ async def test_korean_regulation_draft_skips_llm(monkeypatch) -> None:
     checks = result["extracted_rules"]["compliance_checks"]
     assert checks
     assert checks[0]["needs_review"] is True
-    assert any("장시간 LLM 청킹은 건너뜁니다" in warning for warning in result["warnings"])
+    # 새 로직: draft 변환 메시지 또는 LLM 보강 메시지가 있어야 함
+    assert any(
+        ("규칙 기반" in warning) or ("draft" in warning) or ("구조화" in warning)
+        for warning in result["warnings"]
+    )
 
 
 def test_build_criteria_uses_neutral_review_wording() -> None:

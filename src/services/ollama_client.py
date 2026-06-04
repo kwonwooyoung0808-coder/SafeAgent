@@ -76,11 +76,14 @@ class OllamaClient:
         system_prompt: str,
         user_message: str,
         temperature: float | None = None,
+        json_schema: dict | None = None,
     ) -> str:
         """
         system/user 역할 분리 방식 — Feature 3 전용.
         /api/chat 엔드포인트 사용으로 프롬프트 인젝션 경계를 명확히 구분.
         temperature 오버라이드 가능 (Step 2 형식 변환 시 0.0 고정).
+        json_schema 지정 시 Ollama structured output 모드 활성화 —
+        모델이 반드시 해당 스키마를 따르는 JSON만 출력하도록 강제한다.
         """
         messages = []
         if system_prompt:  # 빈 문자열이면 system 메시지 생략
@@ -88,7 +91,7 @@ class OllamaClient:
         # 사용자 메시지 앞에 /no_think 디렉티브 (방어 ①)
         messages.append({"role": "user", "content": _prepend_no_think(user_message)})
 
-        payload = {
+        payload: dict = {
             "model": self.model,
             "stream": False,
             "think": False,  # 방어 ②
@@ -97,6 +100,10 @@ class OllamaClient:
             },
             "messages": messages,
         }
+        # Phase 2-A: JSON Schema 강제화 — Step 2 형식 변환에서 JSON 파싱 실패 제거
+        if json_schema is not None:
+            payload["format"] = json_schema
+
         async with httpx.AsyncClient(timeout=180.0) as client:
             response = await client.post(f"{self.base_url}/api/chat", json=payload)
             response.raise_for_status()
