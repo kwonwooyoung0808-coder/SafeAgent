@@ -119,7 +119,36 @@ def _load_policy_yaml(row: PolicyModel) -> tuple[Path, str, dict]:
     return yaml_path, raw_yaml, parsed
 
 
+def _has_forbidden_words(parsed: dict) -> bool:
+    """rules 섹션에 실제 exact_terms가 채워져 있는지 확인."""
+    for rule in parsed.get("rules", []):
+        terms = (
+            rule.get("parameters", {})
+            .get("categories", {})
+            .get("custom_policy_terms", {})
+            .get("exact_terms", [])
+        )
+        if terms:
+            return True
+    return False
+
+
 def _yaml_needs_review(raw_yaml: str, parsed: dict | None = None) -> bool:
+    """
+    forbidden_words가 채워진 정책은 judge.criteria의 '검토 필요' 마커가 있어도
+    활성화를 허용한다. 규칙 기반 금지어 매칭은 즉시 동작 가능하기 때문이다.
+    forbidden_words가 없는 경우에만 기존 로직(어떤 needs_review든 차단)을 유지한다.
+    """
+    parsed = parsed or {}
+
+    if _has_forbidden_words(parsed):
+        # rules 딕셔너리 레벨의 needs_review만 확인 (judge.criteria 텍스트 제외)
+        for rule in parsed.get("rules", []):
+            if rule.get("needs_review") is True:
+                return True
+        return False
+
+    # forbidden_words 없음 → 기존 전체 검사 유지
     lowered = raw_yaml.lower()
     if "needs_review: true" in lowered or "검토 필요: true" in raw_yaml:
         return True
@@ -136,7 +165,7 @@ def _yaml_needs_review(raw_yaml: str, parsed: dict | None = None) -> bool:
             return "needs_review: true" in v or "검토 필요: true" in value
         return False
 
-    return walk(parsed or {})
+    return walk(parsed)
 
 
 def _next_policy_version(db: Session, policy_id: str, current_version: str | None) -> str:

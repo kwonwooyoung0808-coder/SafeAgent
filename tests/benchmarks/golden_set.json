@@ -1,23 +1,5 @@
 [
   {
-    "_comment": "사용자 작성 필요 — 아래 구조를 참고해 실제 테스트 케이스를 추가하세요.",
-    "_schema": {
-      "id": "GS-XXX (고유 식별자)",
-      "description": "테스트 케이스 설명",
-      "input_text": "테스트할 내규 문서 텍스트",
-      "expected": {
-        "forbidden_words": ["문서에 명시된 금지어 목록"],
-        "compliance_checks": [
-          {"description": "준수 사항 설명", "severity": "HIGH | MEDIUM | LOW"}
-        ],
-        "actions": {
-          "on_forbidden_word": "BLOCK | LOG"
-        }
-      },
-      "hallucinated_words_must_not_include": ["문서에 없는 단어 — 추출되면 환각으로 판정"]
-    }
-  },
-  {
     "id": "GS-001",
     "description": "기본 금지어 추출 테스트",
     "input_text": "임직원은 '폭력', '불법', '횡령' 표현을 사용해서는 안 됩니다. 위반 시 즉시 차단한다.",
@@ -52,5 +34,355 @@
       "actions": {}
     },
     "hallucinated_words_must_not_include": ["폭력", "욕설", "비하", "횡령"]
+  },
+
+  {
+    "id": "GS-FW-001",
+    "description": "「」 괄호 금지어 추출",
+    "input_text": "제4조(금지사항) 임직원은 「영업비밀」, 「내부자료」, 「고객 명단」을 외부에 유출하여서는 안 된다. 위반 시 즉시 차단한다.",
+    "expected": {
+      "forbidden_words": ["영업비밀", "내부자료", "고객 명단"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["기술자료", "특허", "계약서"]
+  },
+  {
+    "id": "GS-FW-002",
+    "description": "큰따옴표 금지어 추출",
+    "input_text": "다음 표현의 사용을 금지한다: \"횡령\", \"배임\", \"뇌물\". 위반자는 즉시 고발 조치한다.",
+    "expected": {
+      "forbidden_words": ["횡령", "배임", "뇌물"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["사기", "절도", "위조"]
+  },
+  {
+    "id": "GS-FW-003",
+    "description": "문장 내 명시적 금지어 (괄호 없음)",
+    "input_text": "AI 응답에 성희롱, 직장 내 괴롭힘, 차별 발언이 포함되어서는 안 되며, 위반 시 차단 처리한다.",
+    "expected": {
+      "forbidden_words": ["성희롱", "직장 내 괴롭힘", "차별 발언"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["폭행", "협박", "명예훼손"]
+  },
+  {
+    "id": "GS-FW-004",
+    "description": "금지어 + 로그 액션",
+    "input_text": "「개인정보」, 「주민등록번호」 포함 응답은 기록하고 담당자에게 알린다.",
+    "expected": {
+      "forbidden_words": ["개인정보", "주민등록번호"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "LOG"}
+    },
+    "hallucinated_words_must_not_include": ["계좌번호", "비밀번호"]
+  },
+  {
+    "id": "GS-FW-005",
+    "description": "다수 카테고리 금지어 혼합",
+    "input_text": "보안 관련 금지어: 「해킹」, 「악성코드」. 윤리 관련 금지어: 「차별」, 「혐오 발언」. 모두 즉시 차단한다.",
+    "expected": {
+      "forbidden_words": ["해킹", "악성코드", "차별", "혐오 발언"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["바이러스", "스팸", "피싱"]
+  },
+
+  {
+    "id": "GS-CC-001",
+    "description": "준수사항 HIGH severity 추출",
+    "input_text": "제5조(준수사항) ① 모든 임직원은 고객 개인정보를 암호화하여 보관하여야 한다 (심각도: HIGH, 필수 준수). ② 접근 권한은 최소 권한 원칙을 따라야 한다.",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "고객 개인정보 암호화 보관", "severity": "HIGH"},
+        {"description": "최소 권한 원칙 준수", "severity": "MEDIUM"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-CC-002",
+    "description": "명시적 severity 없는 준수사항 → MEDIUM 기본값",
+    "input_text": "직원은 업무용 기기에 개인 소프트웨어를 설치하여서는 안 되며, 외부 USB 사용 시 보안팀 승인을 받아야 한다.",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "업무용 기기 개인 소프트웨어 설치 금지", "severity": "MEDIUM"},
+        {"description": "외부 USB 사용 시 보안팀 승인", "severity": "MEDIUM"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-CC-003",
+    "description": "복수 severity 레벨 혼합",
+    "input_text": "① 데이터 백업은 매일 수행하여야 한다 (심각도: 높음). ② 비밀번호는 90일마다 변경을 권장한다 (심각도: 낮음).",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "매일 데이터 백업 수행", "severity": "HIGH"},
+        {"description": "90일마다 비밀번호 변경", "severity": "LOW"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-CC-004",
+    "description": "근거 조항(제N조) 포함 준수사항",
+    "input_text": "제7조(보안 의무) 시스템관리자는 분기별로 보안 취약점 점검을 실시하여야 하며 중대(HIGH) 취약점 발견 시 48시간 이내 조치하여야 한다.",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "분기별 보안 취약점 점검", "severity": "HIGH"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-CC-005",
+    "description": "준수사항 + 금지어 혼합",
+    "input_text": "제3조 「내부 기밀」 유출을 금지한다. 제4조 정보보호 교육은 연 1회 이상 이수하여야 한다 (심각도: MEDIUM).",
+    "expected": {
+      "forbidden_words": ["내부 기밀"],
+      "compliance_checks": [
+        {"description": "연 1회 이상 정보보호 교육 이수", "severity": "MEDIUM"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": ["영업비밀", "특허"]
+  },
+
+  {
+    "id": "GS-KR-001",
+    "description": "한국식 조문 구조 파싱 — 금지어 추출",
+    "input_text": "제1조(목적) 이 규정은 회사 AI 시스템의 안전한 사용을 목적으로 한다.\n제2조(금지사항) ① 임직원은 「폭력적 표현」, 「혐오 발언」을 AI를 통해 생성하여서는 안 된다.\n② 위반 시 즉시 차단하고 팀장에게 보고한다.\n부칙 이 규정은 공포일로부터 시행한다.",
+    "expected": {
+      "forbidden_words": ["폭력적 표현", "혐오 발언"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["성희롱", "차별", "욕설"]
+  },
+  {
+    "id": "GS-KR-002",
+    "description": "한국식 조문 — 준수사항 중심",
+    "input_text": "제5조(준수사항) ① 시스템 접근 시 이중 인증을 사용하여야 한다.\n② 외부 시스템 연동 시 보안팀 사전 승인을 받아야 한다.\n③ 중요 데이터 처리 시 반드시 암호화하여야 한다 (심각도: HIGH, 필수).",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "이중 인증 사용", "severity": "MEDIUM"},
+        {"description": "외부 시스템 연동 시 보안팀 사전 승인", "severity": "MEDIUM"},
+        {"description": "중요 데이터 처리 시 암호화", "severity": "HIGH"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-KR-003",
+    "description": "한국식 조문 — 금지사항 열거 구조",
+    "input_text": "제4조(금지사항) 임직원은 다음 각 호의 행위를 하여서는 안 된다.\n1. 「영업비밀」을 경쟁사에 제공하는 행위\n2. 「내부 문건」을 무단으로 외부 반출하는 행위\n3. 「미공개 정보」를 이용한 주식 거래\n위반 시 즉시 차단하고 법무팀에 통보한다.",
+    "expected": {
+      "forbidden_words": ["영업비밀", "내부 문건", "미공개 정보"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["고객정보", "특허", "기술문서"]
+  },
+  {
+    "id": "GS-KR-004",
+    "description": "한국식 조문 — 부칙 포함 전체 구조",
+    "input_text": "제1조(목적) 보안 규정의 목적을 정한다.\n제2조(적용범위) 전 임직원에게 적용된다.\n제3조(금지사항) 「해킹 시도」, 「무단 접근」을 금지한다. 차단 처리한다.\n제4조(준수사항) 보안 패치는 7일 이내 적용하여야 한다 (심각도: HIGH).\n부칙 즉시 시행한다.",
+    "expected": {
+      "forbidden_words": ["해킹 시도", "무단 접근"],
+      "compliance_checks": [
+        {"description": "보안 패치 7일 이내 적용", "severity": "HIGH"}
+      ],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["악성코드", "바이러스"]
+  },
+  {
+    "id": "GS-KR-005",
+    "description": "한국식 조문 — 금지어 없고 준수사항만",
+    "input_text": "제5조(정보보호 의무) ① 개인정보는 수집 목적 범위 내에서만 처리하여야 한다.\n② 개인정보 처리 현황은 연 1회 이상 점검하여야 한다.\n③ 개인정보 유출 시 72시간 이내 신고하여야 한다 (심각도: HIGH, 필수 절차).",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "개인정보 수집 목적 내 처리", "severity": "MEDIUM"},
+        {"description": "연 1회 이상 개인정보 처리 현황 점검", "severity": "MEDIUM"},
+        {"description": "개인정보 유출 시 72시간 이내 신고", "severity": "HIGH"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+
+  {
+    "id": "GS-HA-001",
+    "description": "환각 방지 — 유사 단어 추론 금지",
+    "input_text": "「마약」 관련 내용 생성을 금지한다.",
+    "expected": {
+      "forbidden_words": ["마약"],
+      "compliance_checks": [],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": ["마약류", "약물", "환각제", "마리화나"]
+  },
+  {
+    "id": "GS-HA-002",
+    "description": "환각 방지 — severity 추론 금지",
+    "input_text": "직원은 고객 데이터를 외부에 제공하여서는 안 된다.",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "고객 데이터 외부 제공 금지", "severity": "MEDIUM"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": [],
+    "note": "문서에 severity 명시 없으므로 HIGH로 추론하면 안 됨 — MEDIUM이 올바른 기본값"
+  },
+  {
+    "id": "GS-HA-003",
+    "description": "환각 방지 — 문서에 없는 조항 생성 금지",
+    "input_text": "제3조 「비밀번호」를 타인에게 공유하여서는 안 된다.",
+    "expected": {
+      "forbidden_words": ["비밀번호"],
+      "compliance_checks": [],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": ["PIN", "인증코드", "OTP", "보안카드"]
+  },
+  {
+    "id": "GS-HA-004",
+    "description": "환각 방지 — 영문 금지어 추론 금지",
+    "input_text": "임직원은 '폭력'을 조장하는 내용을 생성하여서는 안 된다.",
+    "expected": {
+      "forbidden_words": ["폭력"],
+      "compliance_checks": [],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": ["violence", "violent", "aggression"]
+  },
+  {
+    "id": "GS-HA-005",
+    "description": "환각 방지 — 애매한 표현의 금지어화 금지",
+    "input_text": "회사의 이미지를 손상시키는 행위를 자제하여야 한다.",
+    "expected": {
+      "forbidden_words": [],
+      "compliance_checks": [
+        {"description": "회사 이미지 손상 행위 자제", "severity": "MEDIUM"}
+      ],
+      "actions": {}
+    },
+    "hallucinated_words_must_not_include": ["비방", "욕설", "험담"],
+    "note": "'이미지 손상'은 명시적 금지어가 아니라 준수사항으로 분류해야 함"
+  },
+
+  {
+    "id": "GS-AC-001",
+    "description": "액션 BLOCK 명시 추출",
+    "input_text": "「불법 콘텐츠」가 탐지되면 즉시 차단하고 담당자에게 보고한다.",
+    "expected": {
+      "forbidden_words": ["불법 콘텐츠"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-AC-002",
+    "description": "액션 LOG 명시 추출",
+    "input_text": "「외부 링크」를 포함한 응답은 기록하여 모니터링한다.",
+    "expected": {
+      "forbidden_words": ["외부 링크"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "LOG"}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-AC-003",
+    "description": "액션 미명시 → 기본값 LOG",
+    "input_text": "임직원은 「경쟁사 정보」를 AI 응답에 포함시키지 말아야 한다.",
+    "expected": {
+      "forbidden_words": ["경쟁사 정보"],
+      "compliance_checks": [],
+      "actions": {"on_forbidden_word": "LOG"}
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-AC-004",
+    "description": "금지어 BLOCK + 준수사항 위반 FLAGGED 혼합",
+    "input_text": "「기밀 정보」 유출 시 즉시 차단한다. 준수사항 미이행 시 검토 후 조치한다.",
+    "expected": {
+      "forbidden_words": ["기밀 정보"],
+      "compliance_checks": [
+        {"description": "준수사항 이행 여부 확인", "severity": "MEDIUM"}
+      ],
+      "actions": {
+        "on_forbidden_word": "BLOCK",
+        "on_compliance_fail": "FLAGGED"
+      }
+    },
+    "hallucinated_words_must_not_include": []
+  },
+  {
+    "id": "GS-AC-005",
+    "description": "복잡한 액션 — 금지어/준수사항별 처리 분리",
+    "input_text": "「개인정보」 포함 시 즉시 차단. 포맷 미준수 시 기록 후 담당자 알림. 심각도 HIGH 위반 시 법무팀 통보 후 차단.",
+    "expected": {
+      "forbidden_words": ["개인정보"],
+      "compliance_checks": [
+        {"description": "포맷 준수", "severity": "MEDIUM"},
+        {"description": "HIGH 심각도 위반 시 법무팀 통보", "severity": "HIGH"}
+      ],
+      "actions": {
+        "on_forbidden_word": "BLOCK",
+        "on_compliance_fail": "LOG"
+      }
+    },
+    "hallucinated_words_must_not_include": []
+  },
+
+  {
+    "id": "GS-MX-001",
+    "description": "통합: 한국식 조문 + 금지어 + 준수사항 + BLOCK",
+    "input_text": "제1조(목적) AI 거버넌스 규정.\n제3조(금지사항) 「영업비밀」, 「내부 기술자료」의 외부 유출을 금지한다. 위반 시 즉시 차단.\n제4조(준수사항) ① 모든 AI 응답은 정확성 검토를 거쳐야 한다 (심각도: HIGH).\n② 편향된 응답 생성을 방지하여야 한다.\n부칙 즉시 시행.",
+    "expected": {
+      "forbidden_words": ["영업비밀", "내부 기술자료"],
+      "compliance_checks": [
+        {"description": "AI 응답 정확성 검토", "severity": "HIGH"},
+        {"description": "편향된 응답 생성 방지", "severity": "MEDIUM"}
+      ],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["고객정보", "특허"]
+  },
+  {
+    "id": "GS-MX-002",
+    "description": "통합: 다수 금지어 + 다수 준수사항 + severity 혼합",
+    "input_text": "금지 표현: 「해킹」, 「악성코드」, 「피싱」 — 모두 즉시 차단. 준수사항: 1. 보안 패치 즉시 적용 (심각도: HIGH, 필수). 2. 분기별 보안 감사 실시 (심각도: MEDIUM). 3. 사고 발생 시 24시간 이내 보고 (심각도: HIGH).",
+    "expected": {
+      "forbidden_words": ["해킹", "악성코드", "피싱"],
+      "compliance_checks": [
+        {"description": "보안 패치 즉시 적용", "severity": "HIGH"},
+        {"description": "분기별 보안 감사 실시", "severity": "MEDIUM"},
+        {"description": "사고 발생 시 24시간 이내 보고", "severity": "HIGH"}
+      ],
+      "actions": {"on_forbidden_word": "BLOCK"}
+    },
+    "hallucinated_words_must_not_include": ["랜섬웨어", "스파이웨어"]
   }
 ]
