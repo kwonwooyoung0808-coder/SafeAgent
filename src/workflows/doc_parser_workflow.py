@@ -451,26 +451,25 @@ def _build_criteria(checks: list[dict]) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# 노드 5: 스키마 + 그라운딩 검증
+# 노드 5a: 그라운딩 검증 (직렬화 이전)
+#
+# #16 수정: 환각 금지어 제거/severity 보정은 반드시 yaml_serializer 이전에
+# 수행해야 한다. 직렬화 이후에 extracted_rules만 정제하면, 실제 디스크 YAML과
+# DB 스냅샷(state["yaml_content"])에는 환각 금지어가 그대로 남아 grounding
+# 검증이 산출물에 전혀 반영되지 않는다.
 # ──────────────────────────────────────────────────────────────
-def schema_validator_node(state: DocParserState) -> dict:
+def grounding_validator_node(state: DocParserState) -> dict:
     t0 = time.perf_counter()
     timings = dict(state.get("node_timings") or {})
     hallucination_count = int(state.get("hallucination_removals_count", 0))
-
     warnings = list(state.get("warnings", []))
     rules = dict(state.get("extracted_rules", {}))
     raw_text = state.get("raw_text", "")
 
-    try:
-        policy_dict = yaml.safe_load(state.get("yaml_content", ""))
-        Policy(**policy_dict)
-        validation_passed = True
-    except Exception as e:
-        timings["schema_validator"] = round(time.perf_counter() - t0, 3)
+    # docx/injection 단계 실패 시 정제할 규칙이 없으므로 통과.
+    if state.get("error_message"):
+        timings["grounding_validator"] = round(time.perf_counter() - t0, 3)
         return {
-            "validation_passed":            False,
-            "warnings":                     warnings + [f"스키마 검증 실패: {e}"],
             "node_timings":                 timings,
             "hallucination_removals_count": hallucination_count,
         }
@@ -509,13 +508,40 @@ def schema_validator_node(state: DocParserState) -> dict:
             "WARNING: forbidden_words가 비어 있음 → LLM 추출 누락 가능. 수동 검토 필요."
         )
 
-    timings["schema_validator"] = round(time.perf_counter() - t0, 3)
+    timings["grounding_validator"] = round(time.perf_counter() - t0, 3)
     return {
         "extracted_rules":              rules,
-        "validation_passed":            validation_passed,
         "warnings":                     warnings,
         "node_timings":                 timings,
         "hallucination_removals_count": hallucination_count,
+    }
+
+
+# ──────────────────────────────────────────────────────────────
+# 노드 5b: Pydantic 스키마 검증 (직렬화 이후)
+#
+# 정제된 extracted_rules로 yaml_serializer가 생성한 yaml_content가 Policy
+# 스키마를 만족하는지만 확인한다. grounding 정제는 grounding_validator_node로
+# 분리됨.
+# ──────────────────────────────────────────────────────────────
+def schema_validator_node(state: DocParserState) -> dict:
+    t0 = time.perf_counter()
+    timings = dict(state.get("node_timings") or {})
+    warnings = list(state.get("warnings", []))
+
+    try:
+        policy_dict = yaml.safe_load(state.get("yaml_content", ""))
+        Policy(**policy_dict)
+        validation_passed = True
+    except Exception as e:
+        warnings.append(f"스키마 검증 실패: {e}")
+        validation_passed = False
+
+    timings["schema_validator"] = round(time.perf_counter() - t0, 3)
+    return {
+        "validation_passed": validation_passed,
+        "warnings":          warnings,
+        "node_timings":      timings,
     }
 
 
@@ -685,12 +711,13 @@ def storage_writer_node(state: DocParserState) -> dict:
 def build_doc_parser_graph():
     graph = StateGraph(DocParserState)
 
-    graph.add_node("docx_extractor",   docx_extractor_node)
-    graph.add_node("injection_gate",   injection_gate_node)
-    graph.add_node("llm_parser_agent", llm_parser_agent_node)
-    graph.add_node("yaml_serializer",  yaml_serializer_node)
-    graph.add_node("schema_validator", schema_validator_node)
-    graph.add_node("storage_writer",   storage_writer_node)
+    graph.add_node("docx_extractor",      docx_extractor_node)
+    graph.add_node("injection_gate",      injection_gate_node)
+    graph.add_node("llm_parser_agent",    llm_parser_agent_node)
+    graph.add_node("grounding_validator", grounding_validator_node)
+    graph.add_node("yaml_serializer",     yaml_serializer_node)
+    graph.add_node("schema_validator",    schema_validator_node)
+    graph.add_node("storage_writer",      storage_writer_node)
 
     graph.set_entry_point("docx_extractor")
 
@@ -704,8 +731,11 @@ def build_doc_parser_graph():
         lambda s: END if s.get("injection_detected") else "llm_parser_agent",
         {END: END, "llm_parser_agent": "llm_parser_agent"},
     )
-    graph.add_edge("llm_parser_agent", "yaml_serializer")
-    graph.add_edge("yaml_serializer",  "schema_validator")
+    # #16 수정: grounding 정제 → 직렬화 → 스키마 검증 순으로 배선해
+    # 환각 제거 결과가 실제 yaml_content/스냅샷에 반영되도록 한다.
+    graph.add_edge("llm_parser_agent",    "grounding_validator")
+    graph.add_edge("grounding_validator", "yaml_serializer")
+    graph.add_edge("yaml_serializer",     "schema_validator")
     graph.add_conditional_edges(
         "schema_validator",
         lambda s: "storage_writer" if s.get("validation_passed") else END,

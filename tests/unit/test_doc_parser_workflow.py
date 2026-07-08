@@ -49,6 +49,41 @@ async def test_korean_regulation_draft_skips_full_two_step_parse(monkeypatch) ->
     )
 
 
+def test_grounding_removal_is_reflected_in_serialized_yaml() -> None:
+    """
+    #16 회귀 방지: 환각 금지어가 grounding 검증으로 제거되면, 직렬화된
+    yaml_content 에도 반드시 반영되어야 한다.
+
+    버그 당시: yaml_serializer 가 schema_validator(grounding) 보다 먼저 실행되어
+    제거된 환각 금지어가 실제 YAML/스냅샷에 그대로 남았다. 노드 순서를
+    grounding_validator → yaml_serializer 로 바꿔 해결.
+    """
+    raw_text = "제1조(금지사항) 임직원은 「영업비밀」을 외부에 유출하여서는 안 된다."
+    # LLM 이 원본에 없는 "대외비"를 환각으로 추출했다고 가정.
+    state = {
+        "policy_id": "TEST_GROUNDING_YAML",
+        "policy_name": "Grounding YAML Policy",
+        "raw_text": raw_text,
+        "extracted_rules": {
+            "forbidden_words": ["영업비밀", "대외비"],  # "대외비"는 원본 미존재
+            "compliance_checks": [],
+            "actions": {},
+        },
+        "warnings": [],
+    }
+
+    grounded = doc_parser_workflow.grounding_validator_node(state)
+    # 환각 단어는 extracted_rules 에서 제거됨
+    assert "대외비" not in grounded["extracted_rules"]["forbidden_words"]
+    assert "영업비밀" in grounded["extracted_rules"]["forbidden_words"]
+    assert grounded["hallucination_removals_count"] == 1
+
+    # 정제된 규칙으로 직렬화 → yaml_content 에 환각 단어가 없어야 함
+    serialized = doc_parser_workflow.yaml_serializer_node({**state, **grounded})
+    assert "대외비" not in serialized["yaml_content"]
+    assert "영업비밀" in serialized["yaml_content"]
+
+
 def test_build_criteria_uses_neutral_review_wording() -> None:
     criteria = doc_parser_workflow._build_criteria([
         {

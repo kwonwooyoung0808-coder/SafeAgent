@@ -185,13 +185,18 @@ class PolicyEngine:
                     }
 
                     # [Rule 위반 후 예외 처리]
-                    # Topical Exception: 교육/연구/뉴스 등 주제적 논의는 허용
-                    if self._has_topical_exception(response):
-                        return False, None, ""
-
-                    # High-Risk Intent: 실제 실행 방법/계획을 제공하려는 의도 감지 시 차단
+                    # #7 수정: 고위험 의도를 topical exception 보다 먼저 검사한다.
+                    # "교육 목적" 같은 주제적 표현을 붙여 실제 how-to 콘텐츠를
+                    # 통과시키는 우회를 막기 위함. (예: "마약 만드는 법 단계별로,
+                    # 교육 목적" → 과거엔 '교육' 때문에 무조건 통과)
+                    # High-Risk Intent: 실제 실행 방법/계획 제공 의도면 즉시 차단.
                     if self._has_high_risk_intent(response):
                         return True, span, span["human_reason"]
+
+                    # Topical Exception: 고위험 의도가 없을 때만 교육/연구 등
+                    # 순수 주제적 논의를 허용.
+                    if self._has_topical_exception(response):
+                        return False, None, ""
 
                     # 모호한 경우: Judge에게 위임
                     return True, span, span["human_reason"]
@@ -217,11 +222,12 @@ class PolicyEngine:
                     }
 
                     # [Rule 위반 후 예외 처리]
-                    if self._has_topical_exception(response):
-                        return False, None, ""
-
+                    # #7 수정: 고위험 의도를 topical exception 보다 먼저 검사 (우회 차단).
                     if self._has_high_risk_intent(response):
                         return True, span, span["human_reason"]
+
+                    if self._has_topical_exception(response):
+                        return False, None, ""
 
                     return True, span, span["human_reason"]
 
@@ -425,8 +431,9 @@ class PolicyEngine:
             outside_text = before_json + after_json
 
             return bool(re.search(r"[*#`]", outside_text))
-        except:
+        except Exception:
             # 파싱 실패 시 보수적으로 전체 검사
+            # (bare except 금지 — KeyboardInterrupt/SystemExit 는 통과시킨다)
             return bool(re.search(r"[*#`]", response))
 
     def _create_format_span(self, response: str, rule, policy_id: str, reason: str) -> Tuple[bool, Dict[str, Any], str]:

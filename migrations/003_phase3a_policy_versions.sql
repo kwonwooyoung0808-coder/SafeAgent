@@ -58,19 +58,28 @@ ALTER TABLE query_audit_logs    ADD COLUMN IF NOT EXISTS policy_version VARCHAR(
 ALTER TABLE response_audit_logs ADD COLUMN IF NOT EXISTS policy_version VARCHAR(50);
 ALTER TABLE violation_reports   ADD COLUMN IF NOT EXISTS policy_version VARCHAR(50);
 
+-- 2-bis) SQLAlchemy init_db() 가 먼저 테이블을 만든 경우 created_at 에 DB DEFAULT 가
+-- 빠져 있을 수 있다. 멱등하게 DEFAULT NOW() 를 재설정한다.
+ALTER TABLE policy_versions ALTER COLUMN created_at SET DEFAULT NOW();
+UPDATE policy_versions SET created_at = NOW() WHERE created_at IS NULL;
+
 -- 3) 기존 정책마다 첫 버전 row 자동 생성 (앱 재시작 시 seed 가 처리하지만,
 --    운영 DB 에 미리 채워두면 첫 호출부터 audit 에 version 이 기록됨)
-INSERT INTO policy_versions (id, policy_id, version, yaml_path, is_current, activated_at)
+-- created_at 을 명시적으로 NOW() 로 넣어 SQLAlchemy 가 만든 테이블에서도 안전하게 동작.
+-- (policy_id, version) 가 이미 존재하면 (앱 seed 가 먼저 만든 행) skip — 멱등 보장.
+INSERT INTO policy_versions (id, policy_id, version, yaml_path, is_current, activated_at, created_at)
 SELECT
     gen_random_uuid()::text,
     p.id,
     COALESCE(p.version, '1.0'),
     p.yaml_path,
     TRUE,
+    NOW(),
     NOW()
 FROM policies p
 WHERE NOT EXISTS (
     SELECT 1 FROM policy_versions pv
     WHERE pv.policy_id = p.id AND pv.is_current = TRUE
-);
+)
+ON CONFLICT DO NOTHING;
 

@@ -1,7 +1,8 @@
 """migrations/ 폴더의 .sql 을 번호 순으로 일괄 실행.
 
 사용:
-    .venv/Scripts/python.exe -m scripts.run_migrations
+    python -m scripts.run_migrations
+    python scripts/run_migrations.py     # 직접 실행도 지원
 
 각 SQL 은 멱등 (IF NOT EXISTS) 이므로 여러 번 실행해도 안전.
 실행 결과 (성공/실패) 를 stdout 에 출력.
@@ -10,6 +11,12 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+# 직접 실행 (python scripts/run_migrations.py) 시에도 프로젝트 루트를 sys.path 에
+# 추가해 src 패키지 import 가 가능하도록 한다. -m 모듈 모드에서는 이미 추가되어 있음.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from sqlalchemy import create_engine, text
 
